@@ -83,4 +83,37 @@ def record_decision(d: DecisionIn):
         "id": row["id"],
         "timestamp": row["created_at"].isoformat()
     }
+    @app.get("/ledger/decisions")
+def get_decisions(limit: int = 50):
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        SELECT
+            id,
+            created_at,
+            symbol,
+            timeframe,
+            decision,
+            confidence,
+            tier,
+            reason,
+            payload
+        FROM decision_ledger
+        ORDER BY created_at DESC
+        LIMIT %s;
+        """,
+        (limit,)
+    )
+
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    return {
+        "count": len(rows),
+        "decisions": rows
+    }
+
 
