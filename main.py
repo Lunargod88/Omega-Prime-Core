@@ -3,7 +3,22 @@ from pydantic import BaseModel
 import os
 import psycopg2
 from psycopg2.extras import RealDictCursor, Json
-from datetime import datetime
+
+app = FastAPI(title="Ω PRIME Core")
+
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+
+# --------------------
+# DATABASE
+# --------------------
+def get_db():
+    return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+
+
+# --------------------
+# MODELS
+# --------------------
 class DecisionIn(BaseModel):
     symbol: str
     timeframe: str
@@ -13,34 +28,35 @@ class DecisionIn(BaseModel):
     reason: str | None = None
     payload: dict
 
-app = FastAPI(title="Ω PRIME Core")
 
-DATABASE_URL = os.getenv("DATABASE_URL")
-
-def get_db():
-    return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
-
+# --------------------
+# HEALTH
+# --------------------
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
+
+# --------------------
+# INIT LEDGER
+# --------------------
 @app.post("/ledger/init")
 def init_ledger():
     conn = get_db()
     cur = conn.cursor()
 
     cur.execute("""
-    CREATE TABLE IF NOT EXISTS decision_ledger (
-        id SERIAL PRIMARY KEY,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        symbol TEXT NOT NULL,
-        timeframe TEXT NOT NULL,
-        decision TEXT NOT NULL,
-        confidence INTEGER NOT NULL,
-        tier TEXT NOT NULL,
-        reason TEXT,
-        payload JSONB NOT NULL
-    );
+        CREATE TABLE IF NOT EXISTS decision_ledger (
+            id SERIAL PRIMARY KEY,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            symbol TEXT NOT NULL,
+            timeframe TEXT NOT NULL,
+            decision TEXT NOT NULL,
+            confidence INTEGER NOT NULL,
+            tier TEXT NOT NULL,
+            reason TEXT,
+            payload JSONB NOT NULL
+        );
     """)
 
     conn.commit()
@@ -48,8 +64,11 @@ def init_ledger():
     conn.close()
 
     return {"status": "decision_ledger initialized"}
-    
 
+
+# --------------------
+# RECORD DECISION
+# --------------------
 @app.post("/ledger/decision")
 def record_decision(d: DecisionIn):
     conn = get_db()
@@ -83,7 +102,12 @@ def record_decision(d: DecisionIn):
         "id": row["id"],
         "timestamp": row["created_at"].isoformat()
     }
-    @app.get("/ledger/decisions")
+
+
+# --------------------
+# READ DECISIONS
+# --------------------
+@app.get("/ledger/decisions")
 def get_decisions(limit: int = 50):
     conn = get_db()
     cur = conn.cursor()
@@ -115,5 +139,3 @@ def get_decisions(limit: int = 50):
         "count": len(rows),
         "decisions": rows
     }
-
-
