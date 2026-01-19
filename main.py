@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 import os
 import psycopg2
-from psycopg2.extras import RealDictCursor
+from psycopg2.extras import RealDictCursor, Json
 from datetime import datetime
 class DecisionIn(BaseModel):
     symbol: str
@@ -69,7 +69,7 @@ def record_decision(d: DecisionIn):
             d.confidence,
             d.tier,
             d.reason,
-            d.payload
+            Json(d.payload)
         )
     )
 
