@@ -4,6 +4,14 @@ import os
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from datetime import datetime
+class DecisionIn(BaseModel):
+    symbol: str
+    timeframe: str
+    decision: str
+    confidence: int
+    tier: str
+    reason: str | None = None
+    payload: dict
 
 app = FastAPI(title="Ω PRIME Core")
 
@@ -40,14 +48,7 @@ def init_ledger():
     conn.close()
 
     return {"status": "decision_ledger initialized"}
-    class DecisionIn(BaseModel):
-    symbol: str
-    timeframe: str
-    decision: str
-    confidence: int
-    tier: str
-    reason: str | None = None
-    payload: dict
+    
 
 @app.post("/ledger/decision")
 def record_decision(d: DecisionIn):
