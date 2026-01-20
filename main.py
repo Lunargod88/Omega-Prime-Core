@@ -100,6 +100,34 @@ def record_decision(d: DecisionIn):
             status_code=400,
             detail="Confidence must be between 0 and 100"
         )
+    # --------------------
+    # STEP 13 — DECISION AUTHORITY (GOVERNOR)
+    # --------------------
+
+    # Minimum confidence gate
+    MIN_CONFIDENCE = 70
+
+    if d.confidence < MIN_CONFIDENCE:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Decision denied by Governor: confidence {d.confidence} < {MIN_CONFIDENCE}"
+        )
+
+    # Tier gate (example: disallow low-grade tiers)
+    DISALLOWED_TIERS = {"Ø", "S-", "C", "D"}
+
+    if d.tier in DISALLOWED_TIERS:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Decision denied by Governor: tier {d.tier} not permitted"
+        )
+
+    # Session safety gate (optional but on by default)
+    if d.payload.session is not None and d.payload.session not in {"RTH", "ETH"}:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Decision denied by Governor: session {d.payload.session} not allowed"
+        )
 
     conn = get_db()
     cur = conn.cursor()
