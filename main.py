@@ -12,6 +12,16 @@ app = FastAPI(title="Ω PRIME Core")
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
+# --------------------
+# PERMISSIONS (STEP 18.2)
+# --------------------
+def require_role(allowed: set[str], role: str | None):
+    if role not in allowed:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Permission denied: role {role}"
+        )
+
 
 # --------------------
 # DATABASE
@@ -139,9 +149,13 @@ def record_decision(d: DecisionIn):
     # -------- EXECUTION (18.1B KILL SWITCH) --------
     exec_mode = resolve_execution_mode(d.payload.dict())
     execution_enabled = os.getenv("EXECUTION_ENABLED", "false").lower() == "true"
+role = os.getenv("OMEGA_ROLE", "read")
 
-    if execution_enabled and exec_mode == "PAPER" and d.stance == "ENTER":
-        submit_paper_order(d.dict())
+require_role({"admin"}, role)
+
+if execution_enabled and exec_mode == "PAPER" and d.stance == "ENTER":
+    submit_paper_order(d.dict())
+
 
     # -------- PERSIST --------
     conn = get_db()
