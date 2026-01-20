@@ -21,7 +21,6 @@ def get_db():
 # --------------------
 class OmegaPayload(BaseModel):
     price: float | None = None
-    session: str | None = None
     chiTier: str | None = None
     omegaConf: int | None = None
     memNet: int | None = None
@@ -31,14 +30,26 @@ class OmegaPayload(BaseModel):
     rrStopPrice: float | None = None
     execRegime: str | None = None
     execStance: str | None = None
+    session: str | None = None
 
 class DecisionIn(BaseModel):
     symbol: str
     timeframe: str
+
     decision: str
+    stance: str  # ENTER / HOLD / STAND_DOWN / DENIED
+
     confidence: int
     tier: str
-    reason: str | None = None
+
+    reason_codes: list[str] | None = None
+    reasons_text: list[str] | None = None
+
+    regime: str | None = None
+    session: str | None = None
+    tf_htf: str | None = None
+    tf_ltf: str | None = None
+
     payload: OmegaPayload
 
 # --------------------
@@ -60,12 +71,24 @@ def init_ledger():
         CREATE TABLE IF NOT EXISTS decision_ledger (
             id SERIAL PRIMARY KEY,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
             symbol TEXT NOT NULL,
             timeframe TEXT NOT NULL,
+
             decision TEXT NOT NULL,
+            stance TEXT NOT NULL,
+
             confidence INTEGER NOT NULL,
             tier TEXT NOT NULL,
-            reason TEXT,
+
+            reason_codes TEXT[],
+            reasons_text TEXT[],
+
+            regime TEXT,
+            session TEXT,
+            tf_htf TEXT,
+            tf_ltf TEXT,
+
             payload JSONB NOT NULL
         );
     """)
@@ -82,44 +105,68 @@ def init_ledger():
 @app.post("/ledger/decision")
 def record_decision(d: DecisionIn):
 
+    # Validation
     if d.decision not in {"BUY", "SELL", "EXIT", "HOLD", "ENTER LONG", "ENTER SHORT"}:
-        raise HTTPException(status_code=400, detail="Invalid decision value")
+        raise HTTPException(status_code=400, detail="Invalid decision")
+
+    if d.stance not in {"ENTER", "HOLD", "STAND_DOWN", "DENIED"}:
+        raise HTTPException(status_code=400, detail="Invalid stance")
 
     if not (0 <= d.confidence <= 100):
-        raise HTTPException(status_code=400, detail="Confidence must be 0–100")
+        raise HTTPException(status_code=400, detail="Confidence out of range")
 
+    # Governor
     if d.confidence < 70:
-        raise HTTPException(status_code=403, detail="Governor denied: low confidence")
+        raise HTTPException(status_code=403, detail="Denied: confidence gate")
 
     if d.tier in {"Ø", "S-", "C", "D"}:
-        raise HTTPException(status_code=403, detail="Governor denied: tier")
+        raise HTTPException(status_code=403, detail="Denied: tier gate")
 
-    if d.payload.session and d.payload.session not in {"RTH", "ETH"}:
-        raise HTTPException(status_code=403, detail="Governor denied: session")
+    if d.session and d.session not in {"RTH", "ETH"}:
+        raise HTTPException(status_code=403, detail="Denied: session gate")
 
     exec_mode = resolve_execution_mode(d.payload.dict())
 
-    if not session_allowed(d.payload.session):
-        raise HTTPException(status_code=403, detail="Session not allowed")
+    if not session_allowed(d.session):
+        raise HTTPException(status_code=403, detail="Denied: execution session")
 
-    if exec_mode == "PAPER":
+    if exec_mode == "PAPER" and d.stance == "ENTER":
         submit_paper_order(d.dict())
 
     conn = get_db()
     cur = conn.cursor()
 
     cur.execute("""
-        INSERT INTO decision_ledger
-        (symbol, timeframe, decision, confidence, tier, reason, payload)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        INSERT INTO decision_ledger (
+            symbol,
+            timeframe,
+            decision,
+            stance,
+            confidence,
+            tier,
+            reason_codes,
+            reasons_text,
+            regime,
+            session,
+            tf_htf,
+            tf_ltf,
+            payload
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id, created_at;
     """, (
         d.symbol,
         d.timeframe,
         d.decision,
+        d.stance,
         d.confidence,
         d.tier,
-        d.reason,
+        d.reason_codes,
+        d.reasons_text,
+        d.regime,
+        d.session,
+        d.tf_htf,
+        d.tf_ltf,
         Json(d.payload.dict())
     ))
 
@@ -143,16 +190,7 @@ def get_decisions(limit: int = 50):
     cur = conn.cursor()
 
     cur.execute("""
-        SELECT
-            id,
-            created_at,
-            symbol,
-            timeframe,
-            decision,
-            confidence,
-            tier,
-            reason,
-            payload
+        SELECT *
         FROM decision_ledger
         ORDER BY created_at DESC
         LIMIT %s;
@@ -162,13 +200,10 @@ def get_decisions(limit: int = 50):
     cur.close()
     conn.close()
 
-    return {
-        "count": len(rows),
-        "decisions": rows
-    }
+    return {"count": len(rows), "decisions": rows}
 
 # --------------------
-# STEP 16A-3 — DECISION REPLAY (SINGLE)
+# STEP 16A-3 / 16A-4 — DECISION REPLAY (FORENSIC)
 # --------------------
 @app.get("/ledger/decision/{decision_id}")
 def replay_decision(decision_id: int):
@@ -176,16 +211,7 @@ def replay_decision(decision_id: int):
     cur = conn.cursor()
 
     cur.execute("""
-        SELECT
-            id,
-            created_at,
-            symbol,
-            timeframe,
-            decision,
-            confidence,
-            tier,
-            reason,
-            payload
+        SELECT *
         FROM decision_ledger
         WHERE id = %s;
     """, (decision_id,))
