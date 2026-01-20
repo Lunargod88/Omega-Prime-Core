@@ -19,15 +19,6 @@ def get_db():
 # --------------------
 # MODELS
 # --------------------
-class DecisionIn(BaseModel):
-    symbol: str
-    timeframe: str
-    decision: str
-    confidence: int
-    tier: str
-    reason: str | None = None
-    payload: OmegaPayload
-
 class OmegaPayload(BaseModel):
     price: float | None = None
     session: str | None = None
@@ -40,6 +31,16 @@ class OmegaPayload(BaseModel):
     rrStopPrice: float | None = None
     execRegime: str | None = None
     execStance: str | None = None
+
+
+class DecisionIn(BaseModel):
+    symbol: str
+    timeframe: str
+    decision: str
+    confidence: int
+    tier: str
+    reason: str | None = None
+    payload: OmegaPayload
 
 
 # --------------------
@@ -84,6 +85,22 @@ def init_ledger():
 # --------------------
 @app.post("/ledger/decision")
 def record_decision(d: DecisionIn):
+
+    # --------------------
+    # STEP 12D — VALIDATION (CORRECT LOCATION)
+    # --------------------
+    if d.decision not in {"BUY", "SELL", "EXIT", "HOLD", "ENTER LONG", "ENTER SHORT"}:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid decision value: {d.decision}"
+        )
+
+    if d.confidence < 0 or d.confidence > 100:
+        raise HTTPException(
+            status_code=400,
+            detail="Confidence must be between 0 and 100"
+        )
+
     conn = get_db()
     cur = conn.cursor()
 
@@ -101,7 +118,7 @@ def record_decision(d: DecisionIn):
             d.confidence,
             d.tier,
             d.reason,
-            Json(d.payload)
+            Json(d.payload.dict())
         )
     )
 
@@ -122,23 +139,6 @@ def record_decision(d: DecisionIn):
 # --------------------
 @app.get("/ledger/decisions")
 def get_decisions(limit: int = 50):
-
-
-    # --------------------
-    # STEP 12D — VALIDATION (GOES HERE)
-    # --------------------
-    if d.decision not in {"BUY", "SELL", "EXIT", "HOLD", "ENTER LONG", "ENTER SHORT"}:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid decision value: {d.decision}"
-        )
-
-    if d.confidence < 0 or d.confidence > 100:
-        raise HTTPException(
-            status_code=400,
-            detail="Confidence must be between 0 and 100"
-        )
-
     conn = get_db()
     cur = conn.cursor()
 
