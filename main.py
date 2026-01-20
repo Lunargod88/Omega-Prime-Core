@@ -1,21 +1,24 @@
-from ai.analyzer import analyze_ledger
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import os
 import psycopg2
 from psycopg2.extras import RealDictCursor, Json
+
 from execution.adapter import resolve_execution_mode, session_allowed
 from execution.tradestation import submit_paper_order
+from ai.analyzer import analyze_ledger
 
 app = FastAPI(title="Ω PRIME Core")
 
 DATABASE_URL = os.getenv("DATABASE_URL")
+
 
 # --------------------
 # DATABASE
 # --------------------
 def get_db():
     return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+
 
 # --------------------
 # MODELS
@@ -32,6 +35,7 @@ class OmegaPayload(BaseModel):
     execRegime: str | None = None
     execStance: str | None = None
     session: str | None = None
+
 
 class DecisionIn(BaseModel):
     symbol: str
@@ -53,12 +57,14 @@ class DecisionIn(BaseModel):
 
     payload: OmegaPayload
 
+
 # --------------------
 # HEALTH
 # --------------------
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
 
 # --------------------
 # INIT LEDGER
@@ -100,13 +106,14 @@ def init_ledger():
 
     return {"status": "decision_ledger initialized"}
 
+
 # --------------------
 # RECORD DECISION
 # --------------------
 @app.post("/ledger/decision")
 def record_decision(d: DecisionIn):
 
-    # Validation
+    # -------- VALIDATION --------
     if d.decision not in {"BUY", "SELL", "EXIT", "HOLD", "ENTER LONG", "ENTER SHORT"}:
         raise HTTPException(status_code=400, detail="Invalid decision")
 
@@ -116,7 +123,7 @@ def record_decision(d: DecisionIn):
     if not (0 <= d.confidence <= 100):
         raise HTTPException(status_code=400, detail="Confidence out of range")
 
-    # Governor
+    # -------- GOVERNOR --------
     if d.confidence < 70:
         raise HTTPException(status_code=403, detail="Denied: confidence gate")
 
@@ -126,16 +133,17 @@ def record_decision(d: DecisionIn):
     if d.session and d.session not in {"RTH", "ETH"}:
         raise HTTPException(status_code=403, detail="Denied: session gate")
 
+    if not session_allowed(d.session):
+        raise HTTPException(status_code=403, detail="Denied: execution session")
+
+    # -------- EXECUTION (18.1B KILL SWITCH) --------
     exec_mode = resolve_execution_mode(d.payload.dict())
+    execution_enabled = os.getenv("EXECUTION_ENABLED", "false").lower() == "true"
 
-if not session_allowed(d.session):
-    raise HTTPException(status_code=403, detail="Denied: execution session")
+    if execution_enabled and exec_mode == "PAPER" and d.stance == "ENTER":
+        submit_paper_order(d.dict())
 
-execution_enabled = os.getenv("EXECUTION_ENABLED", "false").lower() == "true"
-
-if execution_enabled and exec_mode == "PAPER" and d.stance == "ENTER":
-    submit_paper_order(d.dict())
-
+    # -------- PERSIST --------
     conn = get_db()
     cur = conn.cursor()
 
@@ -184,6 +192,7 @@ if execution_enabled and exec_mode == "PAPER" and d.stance == "ENTER":
         "timestamp": row["created_at"].isoformat()
     }
 
+
 # --------------------
 # READ DECISIONS (LIST)
 # --------------------
@@ -205,8 +214,9 @@ def get_decisions(limit: int = 50):
 
     return {"count": len(rows), "decisions": rows}
 
+
 # --------------------
-# STEP 16A-3 / 16A-4 — DECISION REPLAY (FORENSIC)
+# DECISION REPLAY (16A-3 / 16A-4)
 # --------------------
 @app.get("/ledger/decision/{decision_id}")
 def replay_decision(decision_id: int):
@@ -227,8 +237,10 @@ def replay_decision(decision_id: int):
         raise HTTPException(status_code=404, detail="Decision not found")
 
     return row
+
+
 # --------------------
-# STEP 17 — AI READ-ONLY ANALYSIS
+# STEP 17 — AI READ-ONLY INSIGHTS
 # --------------------
 @app.get("/ai/insights")
 def ai_insights():
