@@ -3,6 +3,8 @@ from pydantic import BaseModel
 import os
 import psycopg2
 from psycopg2.extras import RealDictCursor, Json
+from execution.adapter import resolve_execution_mode, session_allowed
+from execution.tradestation import submit_paper_order
 
 app = FastAPI(title="Ω PRIME Core")
 
@@ -128,6 +130,21 @@ def record_decision(d: DecisionIn):
             status_code=403,
             detail=f"Decision denied by Governor: session {d.payload.session} not allowed"
         )
+    # --------------------
+    # STEP 14 — EXECUTION ADAPTER
+    # --------------------
+    exec_mode = resolve_execution_mode(d.payload.dict())
+
+    if not session_allowed(d.payload.session):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Decision denied by Governor: session {d.payload.session} not allowed"
+        )
+
+    if exec_mode == "PAPER":
+        execution_result = submit_paper_order(d.dict())
+    else:
+        execution_result = {"status": "logged_only"}
 
     conn = get_db()
     cur = conn.cursor()
