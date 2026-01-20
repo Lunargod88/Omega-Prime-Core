@@ -128,11 +128,13 @@ def record_decision(d: DecisionIn):
 
     exec_mode = resolve_execution_mode(d.payload.dict())
 
-    if not session_allowed(d.session):
-        raise HTTPException(status_code=403, detail="Denied: execution session")
+if not session_allowed(d.session):
+    raise HTTPException(status_code=403, detail="Denied: execution session")
 
-    if exec_mode == "PAPER" and d.stance == "ENTER":
-        submit_paper_order(d.dict())
+execution_enabled = os.getenv("EXECUTION_ENABLED", "false").lower() == "true"
+
+if execution_enabled and exec_mode == "PAPER" and d.stance == "ENTER":
+    submit_paper_order(d.dict())
 
     conn = get_db()
     cur = conn.cursor()
