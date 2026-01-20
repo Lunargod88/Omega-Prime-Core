@@ -11,24 +11,13 @@ from ai.analyzer import analyze_ledger
 app = FastAPI(title="Ω PRIME Core")
 
 DATABASE_URL = os.getenv("DATABASE_URL")
-
-# --------------------
-# PERMISSIONS (STEP 18.2)
-# --------------------
-def require_role(allowed: set[str], role: str | None):
-    if role not in allowed:
-        raise HTTPException(
-            status_code=403,
-            detail=f"Permission denied: role {role}"
-        )
-
+KILL_SWITCH = os.getenv("KILL_SWITCH", "false").lower() == "true"
 
 # --------------------
 # DATABASE
 # --------------------
 def get_db():
     return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
-
 
 # --------------------
 # MODELS
@@ -46,14 +35,11 @@ class OmegaPayload(BaseModel):
     execStance: str | None = None
     session: str | None = None
 
-
 class DecisionIn(BaseModel):
     symbol: str
     timeframe: str
-
     decision: str
     stance: str  # ENTER / HOLD / STAND_DOWN / DENIED
-
     confidence: int
     tier: str
 
@@ -67,14 +53,12 @@ class DecisionIn(BaseModel):
 
     payload: OmegaPayload
 
-
 # --------------------
 # HEALTH
 # --------------------
 @app.get("/health")
 def health():
-    return {"status": "ok"}
-
+    return {"status": "ok", "kill_switch": KILL_SWITCH}
 
 # --------------------
 # INIT LEDGER
@@ -116,14 +100,13 @@ def init_ledger():
 
     return {"status": "decision_ledger initialized"}
 
-
 # --------------------
 # RECORD DECISION
 # --------------------
 @app.post("/ledger/decision")
 def record_decision(d: DecisionIn):
 
-    # -------- VALIDATION --------
+    # Validation
     if d.decision not in {"BUY", "SELL", "EXIT", "HOLD", "ENTER LONG", "ENTER SHORT"}:
         raise HTTPException(status_code=400, detail="Invalid decision")
 
@@ -133,7 +116,7 @@ def record_decision(d: DecisionIn):
     if not (0 <= d.confidence <= 100):
         raise HTTPException(status_code=400, detail="Confidence out of range")
 
-    # -------- GOVERNOR --------
+    # Governor
     if d.confidence < 70:
         raise HTTPException(status_code=403, detail="Denied: confidence gate")
 
@@ -146,18 +129,13 @@ def record_decision(d: DecisionIn):
     if not session_allowed(d.session):
         raise HTTPException(status_code=403, detail="Denied: execution session")
 
-    # -------- EXECUTION (18.1B KILL SWITCH) --------
     exec_mode = resolve_execution_mode(d.payload.dict())
-    execution_enabled = os.getenv("EXECUTION_ENABLED", "false").lower() == "true"
-role = os.getenv("OMEGA_ROLE", "read")
 
-require_role({"admin"}, role)
+    # ---- EXECUTION CONTROL ----
+    if not KILL_SWITCH and exec_mode == "PAPER" and d.stance == "ENTER":
+        submit_paper_order(d.dict())
 
-if execution_enabled and exec_mode == "PAPER" and d.stance == "ENTER":
-    submit_paper_order(d.dict())
-
-
-    # -------- PERSIST --------
+    # ---- PERSIST ----
     conn = get_db()
     cur = conn.cursor()
 
@@ -206,9 +184,8 @@ if execution_enabled and exec_mode == "PAPER" and d.stance == "ENTER":
         "timestamp": row["created_at"].isoformat()
     }
 
-
 # --------------------
-# READ DECISIONS (LIST)
+# READ DECISIONS
 # --------------------
 @app.get("/ledger/decisions")
 def get_decisions(limit: int = 50):
@@ -228,9 +205,8 @@ def get_decisions(limit: int = 50):
 
     return {"count": len(rows), "decisions": rows}
 
-
 # --------------------
-# DECISION REPLAY (16A-3 / 16A-4)
+# DECISION REPLAY
 # --------------------
 @app.get("/ledger/decision/{decision_id}")
 def replay_decision(decision_id: int):
@@ -252,9 +228,8 @@ def replay_decision(decision_id: int):
 
     return row
 
-
 # --------------------
-# STEP 17 — AI READ-ONLY INSIGHTS
+# AI INSIGHTS (READ ONLY)
 # --------------------
 @app.get("/ai/insights")
 def ai_insights():
