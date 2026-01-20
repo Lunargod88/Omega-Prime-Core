@@ -1,3 +1,4 @@
+from ai.analyzer import analyze_ledger
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import os
@@ -224,3 +225,22 @@ def replay_decision(decision_id: int):
         raise HTTPException(status_code=404, detail="Decision not found")
 
     return row
+# --------------------
+# STEP 17 — AI READ-ONLY ANALYSIS
+# --------------------
+@app.get("/ai/insights")
+def ai_insights():
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM decision_ledger
+        ORDER BY created_at ASC;
+    """)
+
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    return analyze_ledger(rows)
