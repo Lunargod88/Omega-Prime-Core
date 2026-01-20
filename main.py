@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header
 from pydantic import BaseModel
 import os
 import psycopg2
@@ -18,6 +18,14 @@ KILL_SWITCH = os.getenv("KILL_SWITCH", "false").lower() == "true"
 # --------------------
 def get_db():
     return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+
+# --------------------
+# PERMISSIONS (STEP 18.2)
+# --------------------
+def resolve_role(x_user_role: str | None):
+    if x_user_role not in {"READ", "CONFIRM", "ADMIN"}:
+        return "READ"
+    return x_user_role
 
 # --------------------
 # MODELS
@@ -58,7 +66,10 @@ class DecisionIn(BaseModel):
 # --------------------
 @app.get("/health")
 def health():
-    return {"status": "ok", "kill_switch": KILL_SWITCH}
+    return {
+        "status": "ok",
+        "kill_switch": KILL_SWITCH
+    }
 
 # --------------------
 # INIT LEDGER
@@ -101,12 +112,23 @@ def init_ledger():
     return {"status": "decision_ledger initialized"}
 
 # --------------------
-# RECORD DECISION
+# RECORD DECISION (18.2 + 18.3 ENFORCED)
 # --------------------
 @app.post("/ledger/decision")
-def record_decision(d: DecisionIn):
+def record_decision(
+    d: DecisionIn,
+    x_user_role: str | None = Header(default=None)
+):
+    role = resolve_role(x_user_role)
 
-    # Validation
+    # ---- PERMISSION GATE (18.2) ----
+    if role != "ADMIN":
+        raise HTTPException(
+            status_code=403,
+            detail="Permission denied: ADMIN role required"
+        )
+
+    # ---- VALIDATION ----
     if d.decision not in {"BUY", "SELL", "EXIT", "HOLD", "ENTER LONG", "ENTER SHORT"}:
         raise HTTPException(status_code=400, detail="Invalid decision")
 
@@ -116,7 +138,7 @@ def record_decision(d: DecisionIn):
     if not (0 <= d.confidence <= 100):
         raise HTTPException(status_code=400, detail="Confidence out of range")
 
-    # Governor
+    # ---- GOVERNOR ----
     if d.confidence < 70:
         raise HTTPException(status_code=403, detail="Denied: confidence gate")
 
@@ -131,7 +153,7 @@ def record_decision(d: DecisionIn):
 
     exec_mode = resolve_execution_mode(d.payload.dict())
 
-    # ---- EXECUTION CONTROL ----
+    # ---- EXECUTION (18.3 KILL SWITCH) ----
     if not KILL_SWITCH and exec_mode == "PAPER" and d.stance == "ENTER":
         submit_paper_order(d.dict())
 
@@ -185,7 +207,7 @@ def record_decision(d: DecisionIn):
     }
 
 # --------------------
-# READ DECISIONS
+# READ DECISIONS (READ SAFE)
 # --------------------
 @app.get("/ledger/decisions")
 def get_decisions(limit: int = 50):
