@@ -184,6 +184,54 @@ def record_decision(d: DecisionIn):
 # --------------------
 @app.get("/ledger/decisions")
 def get_decisions(limit: int = 50):
+# --------------------
+# STEP 16A-3 — DECISION REPLAY (SINGLE ID)
+# --------------------
+@app.get("/ledger/decision/{decision_id}")
+def replay_decision(decision_id: int):
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        SELECT
+            id,
+            created_at,
+            symbol,
+            timeframe,
+            decision,
+            confidence,
+            tier,
+            reason,
+            payload
+        FROM decision_ledger
+        WHERE id = %s;
+        """,
+        (decision_id,)
+    )
+
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+
+    if not row:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Decision {decision_id} not found"
+        )
+
+    return {
+        "decision_id": row["id"],
+        "timestamp": row["created_at"],
+        "symbol": row["symbol"],
+        "timeframe": row["timeframe"],
+        "decision": row["decision"],
+        "confidence": row["confidence"],
+        "tier": row["tier"],
+        "reason": row["reason"],
+        "payload": row["payload"]
+    }
+    
     conn = get_db()
     cur = conn.cursor()
 
