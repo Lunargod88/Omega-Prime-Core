@@ -10,13 +10,11 @@ app = FastAPI(title="Ω PRIME Core")
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-
 # --------------------
 # DATABASE
 # --------------------
 def get_db():
     return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
-
 
 # --------------------
 # MODELS
@@ -34,7 +32,6 @@ class OmegaPayload(BaseModel):
     execRegime: str | None = None
     execStance: str | None = None
 
-
 class DecisionIn(BaseModel):
     symbol: str
     timeframe: str
@@ -44,14 +41,12 @@ class DecisionIn(BaseModel):
     reason: str | None = None
     payload: OmegaPayload
 
-
 # --------------------
 # HEALTH
 # --------------------
 @app.get("/health")
 def health():
     return {"status": "ok"}
-
 
 # --------------------
 # INIT LEDGER
@@ -81,91 +76,52 @@ def init_ledger():
 
     return {"status": "decision_ledger initialized"}
 
-
 # --------------------
 # RECORD DECISION
 # --------------------
 @app.post("/ledger/decision")
 def record_decision(d: DecisionIn):
 
-    # --------------------
-    # STEP 12D — VALIDATION (CORRECT LOCATION)
-    # --------------------
     if d.decision not in {"BUY", "SELL", "EXIT", "HOLD", "ENTER LONG", "ENTER SHORT"}:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid decision value: {d.decision}"
-        )
+        raise HTTPException(status_code=400, detail="Invalid decision value")
 
-    if d.confidence < 0 or d.confidence > 100:
-        raise HTTPException(
-            status_code=400,
-            detail="Confidence must be between 0 and 100"
-        )
-    # --------------------
-    # STEP 13 — DECISION AUTHORITY (GOVERNOR)
-    # --------------------
+    if not (0 <= d.confidence <= 100):
+        raise HTTPException(status_code=400, detail="Confidence must be 0–100")
 
-    # Minimum confidence gate
-    MIN_CONFIDENCE = 70
+    if d.confidence < 70:
+        raise HTTPException(status_code=403, detail="Governor denied: low confidence")
 
-    if d.confidence < MIN_CONFIDENCE:
-        raise HTTPException(
-            status_code=403,
-            detail=f"Decision denied by Governor: confidence {d.confidence} < {MIN_CONFIDENCE}"
-        )
+    if d.tier in {"Ø", "S-", "C", "D"}:
+        raise HTTPException(status_code=403, detail="Governor denied: tier")
 
-    # Tier gate (example: disallow low-grade tiers)
-    DISALLOWED_TIERS = {"Ø", "S-", "C", "D"}
+    if d.payload.session and d.payload.session not in {"RTH", "ETH"}:
+        raise HTTPException(status_code=403, detail="Governor denied: session")
 
-    if d.tier in DISALLOWED_TIERS:
-        raise HTTPException(
-            status_code=403,
-            detail=f"Decision denied by Governor: tier {d.tier} not permitted"
-        )
-
-    # Session safety gate (optional but on by default)
-    if d.payload.session is not None and d.payload.session not in {"RTH", "ETH"}:
-        raise HTTPException(
-            status_code=403,
-            detail=f"Decision denied by Governor: session {d.payload.session} not allowed"
-        )
-    # --------------------
-    # STEP 14 — EXECUTION ADAPTER
-    # --------------------
     exec_mode = resolve_execution_mode(d.payload.dict())
 
     if not session_allowed(d.payload.session):
-        raise HTTPException(
-            status_code=403,
-            detail=f"Decision denied by Governor: session {d.payload.session} not allowed"
-        )
+        raise HTTPException(status_code=403, detail="Session not allowed")
 
     if exec_mode == "PAPER":
-        execution_result = submit_paper_order(d.dict())
-    else:
-        execution_result = {"status": "logged_only"}
+        submit_paper_order(d.dict())
 
     conn = get_db()
     cur = conn.cursor()
 
-    cur.execute(
-        """
+    cur.execute("""
         INSERT INTO decision_ledger
         (symbol, timeframe, decision, confidence, tier, reason, payload)
         VALUES (%s, %s, %s, %s, %s, %s, %s)
         RETURNING id, created_at;
-        """,
-        (
-            d.symbol,
-            d.timeframe,
-            d.decision,
-            d.confidence,
-            d.tier,
-            d.reason,
-            Json(d.payload.dict())
-        )
-    )
+    """, (
+        d.symbol,
+        d.timeframe,
+        d.decision,
+        d.confidence,
+        d.tier,
+        d.reason,
+        Json(d.payload.dict())
+    ))
 
     row = cur.fetchone()
     conn.commit()
@@ -178,65 +134,15 @@ def record_decision(d: DecisionIn):
         "timestamp": row["created_at"].isoformat()
     }
 
-
 # --------------------
-# READ DECISIONS
+# READ DECISIONS (LIST)
 # --------------------
 @app.get("/ledger/decisions")
 def get_decisions(limit: int = 50):
-# --------------------
-# STEP 16A-3 — DECISION REPLAY (SINGLE ID)
-# --------------------
-@app.get("/ledger/decision/{decision_id}")
-def replay_decision(decision_id: int):
     conn = get_db()
     cur = conn.cursor()
 
-    cur.execute(
-        """
-        SELECT
-            id,
-            created_at,
-            symbol,
-            timeframe,
-            decision,
-            confidence,
-            tier,
-            reason,
-            payload
-        FROM decision_ledger
-        WHERE id = %s;
-        """,
-        (decision_id,)
-    )
-
-    row = cur.fetchone()
-    cur.close()
-    conn.close()
-
-    if not row:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Decision {decision_id} not found"
-        )
-
-    return {
-        "decision_id": row["id"],
-        "timestamp": row["created_at"],
-        "symbol": row["symbol"],
-        "timeframe": row["timeframe"],
-        "decision": row["decision"],
-        "confidence": row["confidence"],
-        "tier": row["tier"],
-        "reason": row["reason"],
-        "payload": row["payload"]
-    }
-    
-    conn = get_db()
-    cur = conn.cursor()
-
-    cur.execute(
-        """
+    cur.execute("""
         SELECT
             id,
             created_at,
@@ -250,9 +156,7 @@ def replay_decision(decision_id: int):
         FROM decision_ledger
         ORDER BY created_at DESC
         LIMIT %s;
-        """,
-        (limit,)
-    )
+    """, (limit,))
 
     rows = cur.fetchall()
     cur.close()
@@ -262,3 +166,35 @@ def replay_decision(decision_id: int):
         "count": len(rows),
         "decisions": rows
     }
+
+# --------------------
+# STEP 16A-3 — DECISION REPLAY (SINGLE)
+# --------------------
+@app.get("/ledger/decision/{decision_id}")
+def replay_decision(decision_id: int):
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            id,
+            created_at,
+            symbol,
+            timeframe,
+            decision,
+            confidence,
+            tier,
+            reason,
+            payload
+        FROM decision_ledger
+        WHERE id = %s;
+    """, (decision_id,))
+
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Decision not found")
+
+    return row
