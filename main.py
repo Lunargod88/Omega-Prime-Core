@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import os
 import psycopg2
@@ -26,7 +26,20 @@ class DecisionIn(BaseModel):
     confidence: int
     tier: str
     reason: str | None = None
-    payload: dict
+    payload: OmegaPayload
+
+class OmegaPayload(BaseModel):
+    price: float | None = None
+    session: str | None = None
+    chiTier: str | None = None
+    omegaConf: int | None = None
+    memNet: int | None = None
+    whaleIntentScore: int | None = None
+    expectedRRLow: float | None = None
+    expectedRRHigh: float | None = None
+    rrStopPrice: float | None = None
+    execRegime: str | None = None
+    execStance: str | None = None
 
 
 # --------------------
@@ -109,6 +122,23 @@ def record_decision(d: DecisionIn):
 # --------------------
 @app.get("/ledger/decisions")
 def get_decisions(limit: int = 50):
+
+
+    # --------------------
+    # STEP 12D — VALIDATION (GOES HERE)
+    # --------------------
+    if d.decision not in {"BUY", "SELL", "EXIT", "HOLD", "ENTER LONG", "ENTER SHORT"}:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid decision value: {d.decision}"
+        )
+
+    if d.confidence < 0 or d.confidence > 100:
+        raise HTTPException(
+            status_code=400,
+            detail="Confidence must be between 0 and 100"
+        )
+
     conn = get_db()
     cur = conn.cursor()
 
