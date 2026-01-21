@@ -14,6 +14,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 
 # If env is set, it acts as DEFAULT. We also support DB override via /controls.
 ENV_KILL_SWITCH_DEFAULT = os.getenv("KILL_SWITCH", "false").lower() == "true"
+WEBHOOK_KEY = os.getenv("WEBHOOK_KEY")
 ENV_MODE_DEFAULT = os.getenv("MARKET_MODE", "EQUITY").upper()
 
 
@@ -333,8 +334,19 @@ def record_decision(
     d: DecisionIn,
     x_user_id: str | None = Header(default=None),
     x_user_token: str | None = Header(default=None),
+    x_webhook_key: str | None = Header(default=None),
 ):
+
+# ---- AUTH ROUTING (TradingView Webhook OR User Identity) ----
+if x_webhook_key is not None:
+    # Webhook path: must match env WEBHOOK_KEY
+    if not WEBHOOK_KEY or x_webhook_key.strip() != WEBHOOK_KEY:
+        raise HTTPException(status_code=403, detail="Invalid webhook key")
+    uid, role = ("TRADINGVIEW", "ADMIN")
+else:
+    # Normal path: user identity token
     uid, role = resolve_identity(x_user_id, x_user_token)
+
 
     # ---- PERMISSION GATE (18.2) ----
     # Only ADMIN can post decisions directly.
