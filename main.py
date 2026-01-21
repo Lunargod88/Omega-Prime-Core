@@ -336,21 +336,17 @@ def record_decision(
     x_user_token: str | None = Header(default=None),
     x_webhook_key: str | None = Header(default=None),
 ):
-
-# ---- AUTH ROUTING (TradingView Webhook OR User Identity) ----
-if x_webhook_key is not None:
-    # Webhook path: must match env WEBHOOK_KEY
-    if not WEBHOOK_KEY or x_webhook_key.strip() != WEBHOOK_KEY:
-        raise HTTPException(status_code=403, detail="Invalid webhook key")
-    uid, role = ("TRADINGVIEW", "ADMIN")
-else:
-    # Normal path: user identity token
-    uid, role = resolve_identity(x_user_id, x_user_token)
-
+    # ---- AUTH ROUTING (TradingView OR Human) ----
+    if x_webhook_key is not None:
+        # TradingView webhook path
+        if not WEBHOOK_KEY or x_webhook_key.strip() != WEBHOOK_KEY:
+            raise HTTPException(status_code=403, detail="Invalid webhook key")
+        uid, role = ("TRADINGVIEW", "ADMIN")
+    else:
+        # Human identity path
+        uid, role = resolve_identity(x_user_id, x_user_token)
 
     # ---- PERMISSION GATE (18.2) ----
-    # Only ADMIN can post decisions directly.
-    # (TradingView webhook can still be ADMIN by sending headers later, or you can relax this later.)
     if role != "ADMIN":
         raise HTTPException(status_code=403, detail="Permission denied: ADMIN required")
 
@@ -378,7 +374,6 @@ else:
     if d.tier in {"Ø", "S-", "C", "D"}:
         raise HTTPException(status_code=403, detail="Denied: tier gate")
 
-    # Use either top-level session or payload session
     sess = d.session or d.payload.session
 
     if sess and sess not in {"RTH", "ETH"}:
@@ -445,6 +440,7 @@ else:
         "market_mode": effective_market_mode(),
         "kill_switch": effective_kill_switch()
     }
+
 
 
 # --------------------
