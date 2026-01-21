@@ -337,17 +337,14 @@ def record_decision(
     x_user_token: str | None = Header(default=None),
 ):
     # ---- AUTH ROUTING (TradingView OR Human) ----
-
-# TradingView webhook path (BODY AUTH)
-if d.webhook_key is not None:
-    if not WEBHOOK_KEY or d.webhook_key.strip() != WEBHOOK_KEY:
-        raise HTTPException(status_code=403, detail="Invalid webhook key")
-    uid, role = ("TRADINGVIEW", "ADMIN")
-
-# Human dashboard / API usage
-else:
-    uid, role = resolve_identity(x_user_id, x_user_token)
-
+    if d.webhook_key is not None:
+        # TradingView webhook path (BODY AUTH)
+        if not WEBHOOK_KEY or d.webhook_key.strip() != WEBHOOK_KEY:
+            raise HTTPException(status_code=403, detail="Invalid webhook key")
+        uid, role = ("TRADINGVIEW", "ADMIN")
+    else:
+        # Human identity path
+        uid, role = resolve_identity(x_user_id, x_user_token)
 
     # ---- PERMISSION GATE (18.2) ----
     if role != "ADMIN":
@@ -443,6 +440,7 @@ else:
         "market_mode": effective_market_mode(),
         "kill_switch": effective_kill_switch()
     }
+
 
 
 
