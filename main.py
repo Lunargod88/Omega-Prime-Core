@@ -154,6 +154,7 @@ class OmegaPayload(BaseModel):
 
 
 class DecisionIn(BaseModel):
+    webhook_key: str | None = None
     symbol: str
     timeframe: str
     decision: str
@@ -334,17 +335,19 @@ def record_decision(
     d: DecisionIn,
     x_user_id: str | None = Header(default=None),
     x_user_token: str | None = Header(default=None),
-    x_webhook_key: str | None = Header(default=None),
 ):
     # ---- AUTH ROUTING (TradingView OR Human) ----
-    if x_webhook_key is not None:
-        # TradingView webhook path
-        if not WEBHOOK_KEY or x_webhook_key.strip() != WEBHOOK_KEY:
-            raise HTTPException(status_code=403, detail="Invalid webhook key")
-        uid, role = ("TRADINGVIEW", "ADMIN")
-    else:
-        # Human identity path
-        uid, role = resolve_identity(x_user_id, x_user_token)
+
+# TradingView webhook path (BODY AUTH)
+if d.webhook_key is not None:
+    if not WEBHOOK_KEY or d.webhook_key.strip() != WEBHOOK_KEY:
+        raise HTTPException(status_code=403, detail="Invalid webhook key")
+    uid, role = ("TRADINGVIEW", "ADMIN")
+
+# Human dashboard / API usage
+else:
+    uid, role = resolve_identity(x_user_id, x_user_token)
+
 
     # ---- PERMISSION GATE (18.2) ----
     if role != "ADMIN":
