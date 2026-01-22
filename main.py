@@ -1,9 +1,9 @@
 from fastapi import FastAPI, HTTPException, Header
 from pydantic import BaseModel
 import os
+import uuid
 import psycopg2
 from psycopg2.extras import RealDictCursor, Json
-from datetime import datetime, timezone
 
 from execution.adapter import resolve_execution_mode, session_allowed
 from execution.tradestation import submit_paper_order
@@ -13,16 +13,18 @@ app = FastAPI(title="Ω PRIME Core")
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-# If env is set, it acts as DEFAULT. We also support DB override via /controls.
+# Defaults (env). DB overrides via /controls.
 ENV_KILL_SWITCH_DEFAULT = os.getenv("KILL_SWITCH", "false").lower() == "true"
-WEBHOOK_KEY = os.getenv("WEBHOOK_KEY")
 ENV_MODE_DEFAULT = os.getenv("MARKET_MODE", "EQUITY").upper()
+WEBHOOK_KEY = os.getenv("WEBHOOK_KEY")
+
 
 # --------------------
 # DATABASE
 # --------------------
 def get_db():
     return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+
 
 def ensure_settings_table(cur):
     cur.execute(
@@ -34,6 +36,7 @@ def ensure_settings_table(cur):
         """
     )
 
+
 def get_setting(key: str, default: str) -> str:
     conn = get_db()
     cur = conn.cursor()
@@ -44,10 +47,8 @@ def get_setting(key: str, default: str) -> str:
     row = cur.fetchone()
     cur.close()
     conn.close()
+    return default if not row else row["value"]
 
-    if not row:
-        return default
-    return row["value"]
 
 def set_setting(key: str, value: str) -> None:
     conn = get_db()
@@ -67,19 +68,20 @@ def set_setting(key: str, value: str) -> None:
     cur.close()
     conn.close()
 
+
 def effective_kill_switch() -> bool:
-    # DB override wins; otherwise env default.
     v = get_setting("kill_switch", "true" if ENV_KILL_SWITCH_DEFAULT else "false").lower()
     return v == "true"
+
 
 def effective_market_mode() -> str:
     v = get_setting("market_mode", ENV_MODE_DEFAULT).upper()
     return v if v in {"EQUITY", "CRYPTO"} else "EQUITY"
 
+
 # --------------------
-# ACCOUNTS (STEP 18.1)
+# ACCOUNTS (18.1)
 # --------------------
-# Env format:
 # OMEGA_USERS="JAYLYN=ADMIN,WIFE=CONFIRM"
 # OMEGA_USER_TOKENS="JAYLYN=token1,WIFE=token2"
 def parse_kv_env(env_value: str | None) -> dict[str, str]:
@@ -94,17 +96,12 @@ def parse_kv_env(env_value: str | None) -> dict[str, str]:
         out[k.strip().upper()] = v.strip()
     return out
 
+
 USER_ROLES = parse_kv_env(os.getenv("OMEGA_USERS", ""))
 USER_TOKENS = parse_kv_env(os.getenv("OMEGA_USER_TOKENS", ""))
 
-def resolve_identity(
-    x_user_id: str | None,
-    x_user_token: str | None
-) -> tuple[str, str]:
-    """
-    Returns (user_id, role).
-    If missing/invalid token -> READ.
-    """
+
+def resolve_identity(x_user_id: str | None, x_user_token: str | None) -> tuple[str, str]:
     if not x_user_id:
         return ("ANON", "READ")
 
@@ -122,6 +119,29 @@ def resolve_identity(
         role = "READ"
     return (uid, role)
 
+
+# --------------------
+# SYMBOL UNIVERSE (18.4) — from env (fallback to defaults)
+# --------------------
+def parse_symbol_list(v: str | None) -> set[str]:
+    if not v:
+        return set()
+    return {s.strip().upper() for s in v.split(",") if s.strip()}
+
+
+EQUITY_SYMBOLS_DEFAULT = {"SPY", "QQQ", "AAPL", "TSLA", "NVDA", "MSFT"}
+CRYPTO_SYMBOLS_DEFAULT = {"BTCUSD", "ETHUSD", "SOLUSD"}
+
+EQUITY_SYMBOLS = parse_symbol_list(os.getenv("OMEGA_EQUITY_SYMBOLS")) or EQUITY_SYMBOLS_DEFAULT
+CRYPTO_SYMBOLS = parse_symbol_list(os.getenv("OMEGA_CRYPTO_SYMBOLS")) or CRYPTO_SYMBOLS_DEFAULT
+
+
+def symbol_allowed(symbol: str) -> bool:
+    mode = effective_market_mode()
+    s = symbol.strip().upper()
+    return (s in EQUITY_SYMBOLS) if mode == "EQUITY" else (s in CRYPTO_SYMBOLS)
+
+
 # --------------------
 # MODELS
 # --------------------
@@ -138,13 +158,17 @@ class OmegaPayload(BaseModel):
     execStance: str | None = None
     session: str | None = None
 
+
 class DecisionIn(BaseModel):
     symbol: str
     timeframe: str
     decision: str
     stance: str  # ENTER / HOLD / STAND_DOWN / DENIED
     confidence: int
-    tier: str
+    tier: str  # S+++, S++, S+, S, A, B, C
+
+    # Trade Memory Graph attachment
+    trade_id: str | None = None
 
     reason_codes: list[str] | None = None
     reasons_text: list[str] | None = None
@@ -156,163 +180,107 @@ class DecisionIn(BaseModel):
 
     payload: OmegaPayload
 
+
 class ControlToggle(BaseModel):
     enabled: bool
+
 
 class ModeToggle(BaseModel):
     mode: str  # EQUITY or CRYPTO
 
-# --------------------
-# SYMBOL UNIVERSES (ENV-DRIVEN)
-# --------------------
-def parse_symbol_list(env_value: str | None, fallback: set[str]) -> set[str]:
-    if not env_value:
-        return set(fallback)
-    items = [x.strip().upper() for x in env_value.split(",") if x.strip()]
-    return set(items) if items else set(fallback)
 
-DEFAULT_EQUITY_SYMBOLS = {"SPY", "QQQ", "AAPL", "TSLA", "NVDA", "MSFT"}
-DEFAULT_CRYPTO_SYMBOLS = {"BTCUSD", "ETHUSD", "SOLUSD"}
+class TradeEventIn(BaseModel):
+    event_type: str  # ACK, FLAG_RISK, OVERRIDE, NEAR_MISS, EXIT, POSTMORTEM, NOTE
+    data: dict | None = None
 
-EQUITY_SYMBOLS = parse_symbol_list(os.getenv("OMEGA_EQUITY_SYMBOLS"), DEFAULT_EQUITY_SYMBOLS)
-CRYPTO_SYMBOLS = parse_symbol_list(os.getenv("OMEGA_CRYPTO_SYMBOLS"), DEFAULT_CRYPTO_SYMBOLS)
-
-def symbol_allowed(symbol: str) -> bool:
-    mode = effective_market_mode()
-    s = symbol.strip().upper()
-    if mode == "EQUITY":
-        return s in EQUITY_SYMBOLS
-    return s in CRYPTO_SYMBOLS
 
 # --------------------
-# DECISION STATE MACHINE (STEP 19.X — CORE BRAIN)
+# TRADE MEMORY GRAPH — DB helpers
 # --------------------
-STATES = {
-    "STAND_DOWN",
-    "SCOUTING",
-    "ACCUMULATING",
-    "EXPANDING",
-    "DEFENDING",
-    "EXITING",
-}
-
-def now_utc_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-def compute_next_state(prev_state: str | None, d: DecisionIn) -> tuple[str, str]:
-    """
-    Returns (next_state, transition_reason).
-    Deterministic, conservative v1.
-    """
-    prev = (prev_state or "STAND_DOWN").upper()
-    if prev not in STATES:
-        prev = "STAND_DOWN"
-
-    stance = (d.stance or "").upper()
-    decision = (d.decision or "").upper()
-
-    # Hard stops
-    if stance in {"DENIED", "STAND_DOWN"}:
-        return ("STAND_DOWN", f"{stance} received")
-
-    if decision == "EXIT":
-        return ("EXITING", "EXIT decision received")
-
-    # Entries
-    if stance == "ENTER":
-        # v1: immediate accumulation state
-        return ("ACCUMULATING", "ENTER stance received")
-
-    # Holds
-    if stance == "HOLD":
-        if prev in {"ACCUMULATING", "EXPANDING", "DEFENDING"}:
-            return (prev, "HOLD maintains current in-trade state")
-        # If we're holding but we had no known in-trade state, default safe
-        return ("DEFENDING", "HOLD without prior in-trade state -> DEFENDING")
-
-    # Default
-    return ("STAND_DOWN", "Defaulted to STAND_DOWN")
-
-def ensure_state_tables(cur):
-    # Current state per symbol
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS omega_symbol_state (
-            symbol TEXT PRIMARY KEY,
-            state TEXT NOT NULL,
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            last_decision_id INTEGER,
-            last_transition_reason TEXT
-        );
-    """)
-
-    # State transition audit log
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS omega_state_transitions (
-            id SERIAL PRIMARY KEY,
+def ensure_trade_tables(cur):
+    # trades: lifecycle root
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS trades (
+            trade_id UUID PRIMARY KEY,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             symbol TEXT NOT NULL,
-            prev_state TEXT NOT NULL,
-            next_state TEXT NOT NULL,
-            reason TEXT NOT NULL,
-            decision_id INTEGER
+            side TEXT,             -- LONG / SHORT (optional)
+            status TEXT NOT NULL DEFAULT 'OPEN',   -- OPEN / CLOSED
+            opened_at TIMESTAMPTZ,
+            closed_at TIMESTAMPTZ,
+            meta JSONB NOT NULL DEFAULT '{}'::jsonb
         );
-    """)
+        """
+    )
 
-def get_symbol_state(symbol: str) -> str:
-    s = symbol.strip().upper()
-    conn = get_db()
-    cur = conn.cursor()
-    ensure_state_tables(cur)
-    conn.commit()
+    # trade_events: graph nodes
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS trade_events (
+            id SERIAL PRIMARY KEY,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            trade_id UUID NOT NULL REFERENCES trades(trade_id) ON DELETE CASCADE,
+            event_type TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            data JSONB NOT NULL DEFAULT '{}'::jsonb
+        );
+        """
+    )
 
-    cur.execute("SELECT state FROM omega_symbol_state WHERE symbol=%s;", (s,))
-    row = cur.fetchone()
-    cur.close()
-    conn.close()
-    if not row:
-        return "STAND_DOWN"
-    return (row["state"] or "STAND_DOWN").upper()
 
-def upsert_symbol_state(symbol: str, state: str, decision_id: int | None, reason: str):
-    s = symbol.strip().upper()
-    st = state.upper()
-    if st not in STATES:
-        st = "STAND_DOWN"
+def ensure_decision_trade_id_column(cur):
+    # attach ledger rows to a trade lifecycle
+    cur.execute("ALTER TABLE decision_ledger ADD COLUMN IF NOT EXISTS trade_id UUID;")
 
-    conn = get_db()
-    cur = conn.cursor()
-    ensure_state_tables(cur)
-    conn.commit()
 
-    cur.execute("""
-        INSERT INTO omega_symbol_state (symbol, state, updated_at, last_decision_id, last_transition_reason)
-        VALUES (%s, %s, NOW(), %s, %s)
-        ON CONFLICT (symbol) DO UPDATE
-        SET state = EXCLUDED.state,
-            updated_at = NOW(),
-            last_decision_id = EXCLUDED.last_decision_id,
-            last_transition_reason = EXCLUDED.last_transition_reason;
-    """, (s, st, decision_id, reason))
+def new_trade_id() -> str:
+    return str(uuid.uuid4())
 
-    conn.commit()
-    cur.close()
-    conn.close()
 
-def record_transition(symbol: str, prev_state: str, next_state: str, reason: str, decision_id: int | None):
-    s = symbol.strip().upper()
-    conn = get_db()
-    cur = conn.cursor()
-    ensure_state_tables(cur)
-    conn.commit()
+def infer_side(decision: str) -> str | None:
+    d = (decision or "").upper()
+    if "LONG" in d or d == "BUY":
+        return "LONG"
+    if "SHORT" in d or d == "SELL":
+        return "SHORT"
+    return None
 
-    cur.execute("""
-        INSERT INTO omega_state_transitions (symbol, prev_state, next_state, reason, decision_id)
+
+def create_trade(cur, symbol: str, decision: str, meta: dict | None = None) -> str:
+    tid = new_trade_id()
+    side = infer_side(decision)
+    cur.execute(
+        """
+        INSERT INTO trades (trade_id, symbol, side, status, opened_at, meta)
+        VALUES (%s, %s, %s, 'OPEN', NOW(), %s);
+        """,
+        (tid, symbol.strip().upper(), side, Json(meta or {})),
+    )
+    return tid
+
+
+def close_trade(cur, trade_id: str):
+    cur.execute(
+        """
+        UPDATE trades
+        SET status = 'CLOSED', closed_at = NOW()
+        WHERE trade_id = %s;
+        """,
+        (trade_id,),
+    )
+
+
+def write_trade_event(cur, trade_id: str, event_type: str, user_id: str, role: str, data: dict | None = None):
+    cur.execute(
+        """
+        INSERT INTO trade_events (trade_id, event_type, user_id, role, data)
         VALUES (%s, %s, %s, %s, %s);
-    """, (s, prev_state, next_state, reason, decision_id))
+        """,
+        (trade_id, event_type, user_id, role, Json(data or {})),
+    )
 
-    conn.commit()
-    cur.close()
-    conn.close()
 
 # --------------------
 # HEALTH
@@ -323,8 +291,11 @@ def health():
         "status": "ok",
         "kill_switch": effective_kill_switch(),
         "market_mode": effective_market_mode(),
-        "users_configured": list(USER_ROLES.keys())
+        "users_configured": list(USER_ROLES.keys()),
+        "equity_universe_count": len(EQUITY_SYMBOLS),
+        "crypto_universe_count": len(CRYPTO_SYMBOLS),
     }
+
 
 # --------------------
 # CONTROLS (18.3 + 18.4)
@@ -338,6 +309,7 @@ def get_controls():
         "crypto_symbols": sorted(list(CRYPTO_SYMBOLS)),
     }
 
+
 @app.post("/controls/kill-switch")
 def set_kill_switch(
     body: ControlToggle,
@@ -350,6 +322,7 @@ def set_kill_switch(
 
     set_setting("kill_switch", "true" if body.enabled else "false")
     return {"status": "ok", "kill_switch": effective_kill_switch(), "by": uid}
+
 
 @app.post("/controls/mode")
 def set_mode(
@@ -368,23 +341,26 @@ def set_mode(
     set_setting("market_mode", mode)
     return {"status": "ok", "market_mode": effective_market_mode(), "by": uid}
 
+
 @app.get("/me")
 def me(
     x_user_id: str | None = Header(default=None),
     x_user_token: str | None = Header(default=None),
 ):
     uid, role = resolve_identity(x_user_id, x_user_token)
-    return {"user_id": uid, "role": role}
+    return {"user_id": uid, "role": role, "market_mode": effective_market_mode(), "kill_switch": effective_kill_switch()}
+
 
 # --------------------
-# INIT LEDGER (NOW ALSO ENSURES STATE TABLES + LEDGER COLUMNS)
+# INIT LEDGER + TRADE MEMORY GRAPH
 # --------------------
 @app.post("/ledger/init")
 def init_ledger():
     conn = get_db()
     cur = conn.cursor()
 
-    cur.execute("""
+    cur.execute(
+        """
         CREATE TABLE IF NOT EXISTS decision_ledger (
             id SERIAL PRIMARY KEY,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -408,14 +384,12 @@ def init_ledger():
 
             payload JSONB NOT NULL
         );
-    """)
+        """
+    )
 
     ensure_settings_table(cur)
-    ensure_state_tables(cur)
-
-    # Add state columns to ledger if missing
-    cur.execute("ALTER TABLE decision_ledger ADD COLUMN IF NOT EXISTS state_before TEXT;")
-    cur.execute("ALTER TABLE decision_ledger ADD COLUMN IF NOT EXISTS state_after TEXT;")
+    ensure_trade_tables(cur)
+    ensure_decision_trade_id_column(cur)
 
     # Seed defaults if missing (do not overwrite)
     cur.execute("SELECT 1 FROM omega_settings WHERE key = 'kill_switch';")
@@ -427,19 +401,21 @@ def init_ledger():
 
     cur.execute("SELECT 1 FROM omega_settings WHERE key = 'market_mode';")
     if not cur.fetchone():
+        seed_mode = ENV_MODE_DEFAULT if ENV_MODE_DEFAULT in {"EQUITY", "CRYPTO"} else "EQUITY"
         cur.execute(
             "INSERT INTO omega_settings (key, value) VALUES (%s, %s);",
-            ("market_mode", "EQUITY" if ENV_MODE_DEFAULT not in {"EQUITY", "CRYPTO"} else ENV_MODE_DEFAULT),
+            ("market_mode", seed_mode),
         )
 
     conn.commit()
     cur.close()
     conn.close()
 
-    return {"status": "decision_ledger + omega_settings + state machine initialized"}
+    return {"status": "decision_ledger + omega_settings + trades + trade_events initialized"}
+
 
 # --------------------
-# RECORD DECISION (18.x ENFORCED + STATE MACHINE)
+# RECORD DECISION (18.1 + 18.2 + 18.3 + 18.4 + TRADE MEMORY GRAPH)
 # --------------------
 @app.post("/ledger/decision")
 def record_decision(
@@ -456,16 +432,12 @@ def record_decision(
     else:
         uid, role = resolve_identity(x_user_id, x_user_token)
 
-    # ---- PERMISSION GATE ----
     if role != "ADMIN":
         raise HTTPException(status_code=403, detail="Permission denied: ADMIN required")
 
     # ---- MODE / SYMBOL GATE ----
     if not symbol_allowed(d.symbol):
-        raise HTTPException(
-            status_code=403,
-            detail=f"Denied: symbol {d.symbol} not allowed in mode {effective_market_mode()}"
-        )
+        raise HTTPException(status_code=403, detail=f"Denied: symbol {d.symbol} not allowed in mode {effective_market_mode()}")
 
     # ---- VALIDATION ----
     if d.decision not in {"BUY", "SELL", "EXIT", "HOLD", "ENTER LONG", "ENTER SHORT"}:
@@ -480,38 +452,94 @@ def record_decision(
     # ---- GOVERNOR ----
     if d.confidence < 70:
         raise HTTPException(status_code=403, detail="Denied: confidence gate")
-
     if d.tier in {"Ø", "S-", "C", "D"}:
         raise HTTPException(status_code=403, detail="Denied: tier gate")
 
     sess = d.session or d.payload.session
     if sess and sess not in {"RTH", "ETH"}:
         raise HTTPException(status_code=403, detail="Denied: session gate")
-
     if not session_allowed(sess):
         raise HTTPException(status_code=403, detail="Denied: execution session")
 
     exec_mode = resolve_execution_mode(d.payload.dict())
 
-    # ---- STATE MACHINE: BEFORE DECISION ----
-    prev_state = get_symbol_state(d.symbol)
-    next_state, trans_reason = compute_next_state(prev_state, d)
-
-    # ---- EXECUTION (KILL SWITCH) ----
-    if (not effective_kill_switch()) and exec_mode == "PAPER" and d.stance == "ENTER":
-        submit_paper_order(d.dict())
-
-    # ---- PERSIST ----
+    # ---- TRADE MEMORY GRAPH: allocate/attach trade_id ----
     conn = get_db()
     cur = conn.cursor()
 
-    # Ensure new columns exist even if /ledger/init wasn't run after deploy
-    cur.execute("ALTER TABLE decision_ledger ADD COLUMN IF NOT EXISTS state_before TEXT;")
-    cur.execute("ALTER TABLE decision_ledger ADD COLUMN IF NOT EXISTS state_after TEXT;")
-    ensure_state_tables(cur)
+    # Ensure tables exist even if user forgot /ledger/init once (safe idempotent)
+    ensure_trade_tables(cur)
+    ensure_settings_table(cur)
+    ensure_decision_trade_id_column(cur)
     conn.commit()
 
-    cur.execute("""
+    trade_id = d.trade_id
+
+    # Create trade on ENTER if missing
+    if d.stance == "ENTER" and not trade_id:
+        trade_id = create_trade(
+            cur,
+            symbol=d.symbol,
+            decision=d.decision,
+            meta={
+                "market_mode": effective_market_mode(),
+                "timeframe": d.timeframe,
+                "tf_htf": d.tf_htf,
+                "tf_ltf": d.tf_ltf,
+                "tier": d.tier,
+                "confidence": d.confidence,
+            },
+        )
+        write_trade_event(
+            cur,
+            trade_id=trade_id,
+            event_type="OPEN",
+            user_id=uid,
+            role=role,
+            data={"decision": d.decision, "stance": d.stance, "session": sess, "regime": d.regime},
+        )
+
+    # If EXIT and trade_id exists -> close trade
+    if d.decision == "EXIT" and trade_id:
+        close_trade(cur, trade_id)
+        write_trade_event(
+            cur,
+            trade_id=trade_id,
+            event_type="EXIT",
+            user_id=uid,
+            role=role,
+            data={"decision": d.decision, "stance": d.stance, "session": sess, "regime": d.regime},
+        )
+
+    # Always write a decision-node event if trade_id exists
+    if trade_id:
+        write_trade_event(
+            cur,
+            trade_id=trade_id,
+            event_type="DECISION",
+            user_id=uid,
+            role=role,
+            data={
+                "symbol": d.symbol,
+                "timeframe": d.timeframe,
+                "decision": d.decision,
+                "stance": d.stance,
+                "tier": d.tier,
+                "confidence": d.confidence,
+                "reason_codes": d.reason_codes,
+                "reasons_text": d.reasons_text,
+                "regime": d.regime,
+                "session": sess,
+            },
+        )
+
+    # ---- EXECUTION (kill switch enforced) ----
+    if (not effective_kill_switch()) and exec_mode == "PAPER" and d.stance == "ENTER":
+        submit_paper_order(d.dict())
+
+    # ---- PERSIST decision ledger (now includes trade_id) ----
+    cur.execute(
+        """
         INSERT INTO decision_ledger (
             symbol,
             timeframe,
@@ -526,127 +554,187 @@ def record_decision(
             tf_htf,
             tf_ltf,
             payload,
-            state_before,
-            state_after
+            trade_id
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id, created_at;
-    """, (
-        d.symbol,
-        d.timeframe,
-        d.decision,
-        d.stance,
-        d.confidence,
-        d.tier,
-        d.reason_codes,
-        d.reasons_text,
-        d.regime,
-        sess,
-        d.tf_htf,
-        d.tf_ltf,
-        Json(d.payload.dict()),
-        prev_state,
-        next_state
-    ))
+        """,
+        (
+            d.symbol,
+            d.timeframe,
+            d.decision,
+            d.stance,
+            d.confidence,
+            d.tier,
+            d.reason_codes,
+            d.reasons_text,
+            d.regime,
+            sess,
+            d.tf_htf,
+            d.tf_ltf,
+            Json(d.payload.dict()),
+            trade_id,
+        ),
+    )
 
     row = cur.fetchone()
     conn.commit()
     cur.close()
     conn.close()
 
-    # ---- STATE MACHINE: AFTER DECISION ----
-    decision_id = row["id"]
-    record_transition(d.symbol, prev_state, next_state, trans_reason, decision_id)
-    upsert_symbol_state(d.symbol, next_state, decision_id, trans_reason)
-
     return {
         "status": "recorded",
-        "id": decision_id,
+        "id": row["id"],
         "timestamp": row["created_at"].isoformat(),
         "by": uid,
         "role": role,
         "market_mode": effective_market_mode(),
         "kill_switch": effective_kill_switch(),
-        "state_before": prev_state,
-        "state_after": next_state,
-        "transition_reason": trans_reason
+        "trade_id": trade_id,
     }
 
+
 # --------------------
-# READ DECISIONS (READ SAFE)
+# READ DECISIONS
 # --------------------
 @app.get("/ledger/decisions")
 def get_decisions(limit: int = 50):
     conn = get_db()
     cur = conn.cursor()
-
-    cur.execute("""
+    cur.execute(
+        """
         SELECT *
         FROM decision_ledger
         ORDER BY created_at DESC
         LIMIT %s;
-    """, (limit,))
-
+        """,
+        (limit,),
+    )
     rows = cur.fetchall()
     cur.close()
     conn.close()
-
     return {"count": len(rows), "decisions": rows}
 
-# --------------------
-# DECISION REPLAY
-# --------------------
+
 @app.get("/ledger/decision/{decision_id}")
 def replay_decision(decision_id: int):
     conn = get_db()
     cur = conn.cursor()
+    cur.execute("SELECT * FROM decision_ledger WHERE id = %s;", (decision_id,))
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="Decision not found")
+    return row
 
-    cur.execute("""
+
+# --------------------
+# TRADE MEMORY GRAPH — endpoints
+# --------------------
+@app.get("/trades")
+def list_trades(limit: int = 50):
+    conn = get_db()
+    cur = conn.cursor()
+    ensure_trade_tables(cur)
+    conn.commit()
+
+    cur.execute(
+        """
         SELECT *
-        FROM decision_ledger
-        WHERE id = %s;
-    """, (decision_id,))
+        FROM trades
+        ORDER BY created_at DESC
+        LIMIT %s;
+        """,
+        (limit,),
+    )
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    return {"count": len(rows), "trades": rows}
 
+
+@app.get("/trades/{trade_id}")
+def get_trade(trade_id: str):
+    conn = get_db()
+    cur = conn.cursor()
+    ensure_trade_tables(cur)
+    conn.commit()
+
+    cur.execute("SELECT * FROM trades WHERE trade_id = %s;", (trade_id,))
     row = cur.fetchone()
     cur.close()
     conn.close()
 
     if not row:
-        raise HTTPException(status_code=404, detail="Decision not found")
-
+        raise HTTPException(status_code=404, detail="Trade not found")
     return row
 
-# --------------------
-# STATE READOUT (FOR DASHBOARD + OPERATIONS)
-# --------------------
-@app.get("/state/{symbol}")
-def read_state(symbol: str):
-    s = symbol.strip().upper()
-    if not symbol_allowed(s):
-        raise HTTPException(status_code=403, detail="Symbol not allowed in current mode")
-    st = get_symbol_state(s)
-    return {"symbol": s, "state": st}
 
-@app.get("/state/transitions/{symbol}")
-def read_transitions(symbol: str, limit: int = 50):
-    s = symbol.strip().upper()
+@app.get("/trades/{trade_id}/events")
+def trade_events(trade_id: str, limit: int = 200):
     conn = get_db()
     cur = conn.cursor()
-    ensure_state_tables(cur)
+    ensure_trade_tables(cur)
     conn.commit()
 
-    cur.execute("""
+    cur.execute(
+        """
         SELECT *
-        FROM omega_state_transitions
-        WHERE symbol = %s
-        ORDER BY created_at DESC
+        FROM trade_events
+        WHERE trade_id = %s
+        ORDER BY created_at ASC
         LIMIT %s;
-    """, (s, limit))
-
+        """,
+        (trade_id, limit),
+    )
     rows = cur.fetchall()
     cur.close()
     conn.close()
-    return {"symbol": s, "count": len(rows), "transitions": rows}
+    return {"count": len(rows), "events": rows}
+
+
+@app.post("/trades/{trade_id}/events")
+def add_trade_event(
+    trade_id: str,
+    body: TradeEventIn,
+    x_user_id: str | None = Header(default=None),
+    x_user_token: str | None = Header(default=None),
+):
+    uid, role = resolve_identity(x_user_id, x_user_token)
+
+    # Wife (CONFIRM) can do ACK + FLAG_RISK only
+    allowed_for_confirm = {"ACK", "FLAG_RISK"}
+    allowed_for_admin = {"ACK", "FLAG_RISK", "OVERRIDE", "NEAR_MISS", "EXIT", "POSTMORTEM", "NOTE"}
+
+    et = body.event_type.strip().upper()
+
+    if role == "CONFIRM" and et not in allowed_for_confirm:
+        raise HTTPException(status_code=403, detail="CONFIRM role limited to ACK / FLAG_RISK")
+    if role != "ADMIN" and role != "CONFIRM":
+        raise HTTPException(status_code=403, detail="READ role cannot write events")
+    if role == "ADMIN" and et not in allowed_for_admin:
+        raise HTTPException(status_code=400, detail="Invalid event_type")
+
+    conn = get_db()
+    cur = conn.cursor()
+    ensure_trade_tables(cur)
+    conn.commit()
+
+    # validate trade exists
+    cur.execute("SELECT trade_id FROM trades WHERE trade_id = %s;", (trade_id,))
+    if not cur.fetchone():
+        cur.close()
+        conn.close()
+        raise HTTPException(status_code=404, detail="Trade not found")
+
+    write_trade_event(cur, trade_id=trade_id, event_type=et, user_id=uid, role=role, data=body.data or {})
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    return {"status": "ok", "trade_id": trade_id, "event_type": et, "by": uid, "role": role}
+
 
 # --------------------
 # AI INSIGHTS (READ ONLY)
@@ -655,15 +743,8 @@ def read_transitions(symbol: str, limit: int = 50):
 def ai_insights():
     conn = get_db()
     cur = conn.cursor()
-
-    cur.execute("""
-        SELECT *
-        FROM decision_ledger
-        ORDER BY created_at ASC;
-    """)
-
+    cur.execute("SELECT * FROM decision_ledger ORDER BY created_at ASC;")
     rows = cur.fetchall()
     cur.close()
     conn.close()
-
     return analyze_ledger(rows)
