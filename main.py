@@ -789,7 +789,9 @@ def replay_decision(decision_id: int):
     if not row:
         raise HTTPException(status_code=404, detail="Decision not found")
     return row
-
+@app.get("/analysis")
+def get_analysis():
+    return analyze_ledger()
 # --------------------
 # TRADE MEMORY GRAPH — endpoints
 # --------------------
