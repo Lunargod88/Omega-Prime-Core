@@ -829,3 +829,6 @@ def get_trade(trade_id: str):
     if not row:
         raise HTTPException(status_code=404, detail="Trade not found")
     return row
+    
+    from observability import router as observability_router
+app.include_router(observability_router)
