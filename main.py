@@ -8,7 +8,7 @@ from psycopg2.extras import RealDictCursor, Json
 from execution.adapter import resolve_execution_mode, session_allowed
 from execution.tradestation import submit_paper_order
 from ai.analyzer import analyze_ledger
-
+from observability import router as observability_router
 # --------------------
 # DECISION STATE MACHINE (import-safe + name-flexible)
 # --------------------
