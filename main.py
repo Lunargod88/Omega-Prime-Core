@@ -339,7 +339,18 @@ def me(
     x_user_token: str | None = Header(default=None),
 ):
     uid, role = resolve_identity(x_user_id, x_user_token)
-    return {"user_id": uid, "role": role, "market_mode": effective_market_mode(), "kill_switch": effective_kill_switch()}
+
+    mode = effective_market_mode()
+    allowed = list(EQUITY_SYMBOLS if mode == "EQUITY" else CRYPTO_SYMBOLS)
+
+    return {
+        "user_id": uid,
+        "role": role,
+        "market_mode": mode,
+        "kill_switch": effective_kill_switch(),
+        "allowedSymbols": allowed,
+    }
+
 
 # --------------------
 # INIT LEDGER + TRADE MEMORY GRAPH
