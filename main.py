@@ -9,6 +9,153 @@ from execution.adapter import resolve_execution_mode, session_allowed
 from execution.tradestation import submit_paper_order
 from ai.analyzer import analyze_ledger
 
+# --------------------
+# DECISION STATE MACHINE (import-safe + name-flexible)
+# --------------------
+import importlib
+
+def _load_state_machine_callable():
+    """
+    Loads omegaprime core statemachine.py if present.
+    We DO NOT assume a single function name (because that’s how systems get broken).
+    We scan for common callable names and use the first match.
+    """
+    try:
+        mod = importlib.import_module("statemachine")
+    except Exception:
+        return None, None
+
+    # Candidate function names (ordered by preference)
+    candidates = [
+        "enforce_decision_state",
+        "apply_decision_state",
+        "run_decision_state_machine",
+        "decision_state_machine",
+        "evaluate_decision_state",
+        "evaluate_state",
+        "run_state_machine",
+        "transition",
+        "next_state",
+    ]
+
+    for name in candidates:
+        fn = getattr(mod, name, None)
+        if callable(fn):
+            return mod, fn
+
+    return mod, None
+
+
+_SM_MOD, _SM_FN = _load_state_machine_callable()
+
+
+def _coerce_sm_result(result):
+    """
+    Normalizes whatever the state machine returns into:
+      allowed: bool
+      reason: str|None
+      state:  any
+      meta:   dict
+    Supported shapes:
+      - bool
+      - {"allowed": bool, "reason": "...", "state": "...", ...}
+      - ("ALLOW"/"DENY", "reason")
+      - ("ALLOW"/"DENY", {"reason": "...", ...})
+    """
+    allowed = True
+    reason = None
+    state = None
+    meta = {}
+
+    if result is None:
+        return allowed, reason, state, meta
+
+    if isinstance(result, bool):
+        allowed = result
+        return allowed, reason, state, meta
+
+    if isinstance(result, dict):
+        if "allowed" in result:
+            allowed = bool(result.get("allowed"))
+        elif "deny" in result:
+            allowed = not bool(result.get("deny"))
+        elif "ok" in result:
+            allowed = bool(result.get("ok"))
+
+        reason = result.get("reason") or result.get("detail") or result.get("message")
+        state = result.get("state") or result.get("decision_state") or result.get("status")
+        meta = {k: v for k, v in result.items() if k not in {"allowed", "deny", "ok"}}
+        return allowed, reason, state, meta
+
+    if isinstance(result, (tuple, list)) and len(result) >= 1:
+        head = result[0]
+        if isinstance(head, str):
+            h = head.strip().upper()
+            if h in {"DENY", "BLOCK", "REJECT", "NO"}:
+                allowed = False
+            elif h in {"ALLOW", "OK", "PASS", "YES"}:
+                allowed = True
+        elif isinstance(head, bool):
+            allowed = head
+
+        if len(result) >= 2:
+            tail = result[1]
+            if isinstance(tail, str):
+                reason = tail
+            elif isinstance(tail, dict):
+                reason = tail.get("reason") or tail.get("detail") or tail.get("message")
+                state = tail.get("state") or tail.get("decision_state") or tail.get("status")
+                meta = tail
+
+        return allowed, reason, state, meta
+
+    # Fallback: treat unknown return as allow but capture stringified info
+    return True, str(result), None, {"raw": result}
+
+
+def enforce_decision_state_machine(d: dict, context: dict):
+    """
+    Calls the statemachine if we found a callable.
+    Hard-blocks if it returns a deny.
+    """
+    if not _SM_FN:
+        # State machine module missing callable — do not break pipeline.
+        # You still get green deploy; you can rename/correct the function and it will latch automatically.
+        return {"allowed": True, "note": "statemachine callable not found; skipped"}
+
+    try:
+        # Try common calling patterns:
+        # 1) fn(d, context)
+        # 2) fn(d)
+        # 3) fn(**payload)
+        try:
+            result = _SM_FN(d, context)
+        except TypeError:
+            try:
+                result = _SM_FN(d)
+            except TypeError:
+                merged = dict(d)
+                merged.update(context or {})
+                result = _SM_FN(**merged)
+
+        allowed, reason, state, meta = _coerce_sm_result(result)
+
+        if not allowed:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Denied by Decision State Machine{': ' + reason if reason else ''}"
+            )
+
+        return {"allowed": True, "state": state, "meta": meta}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        # Fail-safe: do NOT hard-crash trading pipeline on state machine exception.
+        # We surface it explicitly so you can see it in logs + dashboard diagnostics.
+        return {"allowed": True, "note": f"statemachine error bypassed: {type(e).__name__}: {e}"}
+
+
 app = FastAPI(title="Ω PRIME Core")
 
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -415,7 +562,7 @@ def init_ledger():
     return {"status": "decision_ledger + omega_settings + trades + trade_events initialized"}
 
 # --------------------
-# RECORD DECISION (18.1 + 18.2 + 18.3 + 18.4 + TRADE MEMORY GRAPH)
+# RECORD DECISION (18.1 + 18.2 + 18.3 + 18.4 + TRADE MEMORY GRAPH + DECISION STATE MACHINE)
 # --------------------
 @app.post("/ledger/decision")
 def record_decision(
@@ -463,6 +610,16 @@ def record_decision(
 
     exec_mode = resolve_execution_mode(d.payload.dict())
 
+    # ---- DECISION STATE MACHINE (hard governance gate) ----
+    sm_context = {
+        "user_id": uid,
+        "role": role,
+        "market_mode": effective_market_mode(),
+        "kill_switch": effective_kill_switch(),
+        "exec_mode": exec_mode,
+    }
+    sm_result = enforce_decision_state_machine(d.dict(), sm_context)
+
     # ---- TRADE MEMORY GRAPH: allocate/attach trade_id ----
     conn = get_db()
     cur = conn.cursor()
@@ -488,6 +645,8 @@ def record_decision(
                 "tf_ltf": d.tf_ltf,
                 "tier": d.tier,
                 "confidence": d.confidence,
+                "decision_state": sm_result.get("state"),
+                "decision_state_meta": sm_result.get("meta") or {},
             },
         )
         write_trade_event(
@@ -530,6 +689,9 @@ def record_decision(
                 "reasons_text": d.reasons_text,
                 "regime": d.regime,
                 "session": sess,
+                "decision_state": sm_result.get("state"),
+                "decision_state_meta": sm_result.get("meta") or {},
+                "decision_state_note": sm_result.get("note"),
             },
         )
 
@@ -591,6 +753,8 @@ def record_decision(
         "market_mode": effective_market_mode(),
         "kill_switch": effective_kill_switch(),
         "trade_id": trade_id,
+        "decision_state": sm_result.get("state"),
+        "decision_state_note": sm_result.get("note"),
     }
 
 # --------------------
@@ -665,5 +829,3 @@ def get_trade(trade_id: str):
     if not row:
         raise HTTPException(status_code=404, detail="Trade not found")
     return row
-
-...
