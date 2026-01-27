@@ -10,6 +10,9 @@ from execution.tradestation import submit_paper_order
 from ai.analyzer import analyze_ledger
 from observability import router as observability_router
 from negotiation import router as negotiation_router
+from api.webhook import router as webhook_router
+from api.decisions import router as decisions_router
+
 # --------------------
 # DECISION STATE MACHINE (import-safe + name-flexible)
 # --------------------
@@ -836,3 +839,5 @@ def get_trade(trade_id: str):
     from observability import router as observability_router
 app.include_router(observability_router)
 app.include_router(negotiation_router)
+app.include_router(webhook_router)
+app.include_router(decisions_router)
