@@ -21,7 +21,7 @@ def list_decisions(
     limit: int = Query(default=50, ge=1, le=500),
 ):
     """
-    PHASE 2: Let dashboard pull decisions filtered by account (cockpit separation).
+    PHASE 3: Dashboard pulls decisions WITH price context.
     """
     where = []
     params = {}
@@ -45,7 +45,12 @@ def list_decisions(
             tier,
             authority,
             confidence,
-            regime
+            regime,
+            entry_price,
+            stop_price,
+            min_target,
+            max_target,
+            current_price
         FROM decision_ledger
         {where_sql}
         ORDER BY created_at DESC
