@@ -26,9 +26,8 @@ Stance = Literal[
 Tier = Literal["S+++", "S++", "S+", "S", "A", "B", "C", "Ø"]
 Authority = Literal["PRIME", "NORMAL"]
 
-# NOTE: Regime/ExitReason/ExitQuality are later phases in the roadmap,
-# but the DB already may have them. Keep them optional here so we don't drift.
 Regime = Optional[Literal["COMPRESSION", "EXPANSION", "NEUTRAL"]]
+
 
 class TradingViewAlert(BaseModel):
     account: Account
@@ -52,9 +51,7 @@ class TradingViewAlert(BaseModel):
     meta: Optional[Dict[str, Any]] = None
 
 
-
 def _db_conn():
-    # Railway usually provides DATABASE_URL
     dsn = os.getenv("DATABASE_URL")
     if not dsn:
         raise RuntimeError("DATABASE_URL is not set")
@@ -66,18 +63,12 @@ async def tradingview_webhook(
     request: Request,
     x_omega_key: Optional[str] = Header(default=None),
 ):
-    """
-    PHASE 2: Ingest TradingView alerts with ACCOUNT + STANCE + TIER + AUTHORITY split.
-
-    Security: optional shared secret via X-Omega-Key (recommended).
-    """
     expected = os.getenv("OMEGA_WEBHOOK_KEY")
     if expected and x_omega_key != expected:
         raise HTTPException(status_code=401, detail="Invalid webhook key")
 
     body = await request.json()
 
-    # Allow either direct dict or {"payload": {...}} styles
     payload = body.get("payload") if isinstance(body, dict) else None
     data = payload if isinstance(payload, dict) else body
 
@@ -86,65 +77,60 @@ async def tradingview_webhook(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid alert payload: {e}")
 
-    # Store minimal Phase 2 law in ledger.
-    # IMPORTANT: adjust table/column names ONLY if your migration used different names.
-   insert_sql = """
-    INSERT INTO decision_ledger (
-        account,
-        symbol,
-        timeframe,
-        stance,
-        tier,
-        authority,
-        confidence,
-        regime,
-        entry_price,
-        stop_price,
-        min_target,
-        max_target,
-        current_price,
-        raw_payload
-    )
-    VALUES (
-        %(account)s,
-        %(symbol)s,
-        %(timeframe)s,
-        %(stance)s,
-        %(tier)s,
-        %(authority)s,
-        %(confidence)s,
-        %(regime)s,
-        %(entry_price)s,
-        %(stop_price)s,
-        %(min_target)s,
-        %(max_target)s,
-        %(current_price)s,
-        %(raw_payload)s::jsonb
-    )
-    RETURNING id, created_at
-"""
+    insert_sql = """
+        INSERT INTO decision_ledger (
+            account,
+            symbol,
+            timeframe,
+            stance,
+            tier,
+            authority,
+            confidence,
+            regime,
+            entry_price,
+            stop_price,
+            min_target,
+            max_target,
+            current_price,
+            raw_payload
+        )
+        VALUES (
+            %(account)s,
+            %(symbol)s,
+            %(timeframe)s,
+            %(stance)s,
+            %(tier)s,
+            %(authority)s,
+            %(confidence)s,
+            %(regime)s,
+            %(entry_price)s,
+            %(stop_price)s,
+            %(min_target)s,
+            %(max_target)s,
+            %(current_price)s,
+            %(raw_payload)s::jsonb
+        )
+        RETURNING id, created_at
+    """
 
+    params = {
+        "account": alert.account,
+        "symbol": alert.symbol,
+        "timeframe": alert.timeframe,
+        "stance": alert.stance,
+        "tier": alert.tier,
+        "authority": alert.authority,
+        "confidence": alert.confidence,
+        "regime": alert.regime,
 
-params = {
-    "account": alert.account,
-    "symbol": alert.symbol,
-    "timeframe": alert.timeframe,
-    "stance": alert.stance,
-    "tier": alert.tier,
-    "authority": alert.authority,
-    "confidence": alert.confidence,
-    "regime": alert.regime,
+        "entry_price": alert.entry_price,
+        "stop_price": alert.stop_price,
+        "min_target": alert.min_target,
+        "max_target": alert.max_target,
+        "current_price": alert.current_price,
 
-    # PHASE 3 — PRICE CONTEXT
-    "entry_price": alert.entry_price,
-    "stop_price": alert.stop_price,
-    "min_target": alert.min_target,
-    "max_target": alert.max_target,
-    "current_price": alert.current_price,
-
-    "raw_payload": json.dumps(body),
-}
-
+        "raw_payload": json.dumps(body),
+    }
 
     try:
         with _db_conn() as conn:
