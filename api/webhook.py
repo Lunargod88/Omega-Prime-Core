@@ -31,22 +31,26 @@ Authority = Literal["PRIME", "NORMAL"]
 Regime = Optional[Literal["COMPRESSION", "EXPANSION", "NEUTRAL"]]
 
 class TradingViewAlert(BaseModel):
-    # Identity / routing
     account: Account
     symbol: str
-    timeframe: Optional[str] = None  # strongly recommended key (prevents BTC 5m vs 1h collisions)
+    timeframe: Optional[str] = None
 
-    # Phase 1 + 2 truth fields
     stance: Stance
     tier: Tier
     authority: Authority
     confidence: Optional[float] = Field(default=None, ge=0, le=100)
 
-    # Optional “context” fields (keep optional so Phase 2 stays Phase 2)
     regime: Regime = None
 
-    # Raw payload passthrough
+    # PHASE 3 — PRICE CONTEXT
+    entry_price: Optional[float] = None
+    stop_price: Optional[float] = None
+    min_target: Optional[float] = None
+    max_target: Optional[float] = None
+    current_price: Optional[float] = None
+
     meta: Optional[Dict[str, Any]] = None
+
 
 
 def _db_conn():
@@ -84,43 +88,63 @@ async def tradingview_webhook(
 
     # Store minimal Phase 2 law in ledger.
     # IMPORTANT: adjust table/column names ONLY if your migration used different names.
-    insert_sql = """
-        INSERT INTO decision_ledger (
-            account,
-            symbol,
-            timeframe,
-            stance,
-            tier,
-            authority,
-            confidence,
-            regime,
-            raw_payload
-        )
-        VALUES (
-            %(account)s,
-            %(symbol)s,
-            %(timeframe)s,
-            %(stance)s,
-            %(tier)s,
-            %(authority)s,
-            %(confidence)s,
-            %(regime)s,
-            %(raw_payload)s::jsonb
-        )
-        RETURNING id, created_at
-    """
+   insert_sql = """
+    INSERT INTO decision_ledger (
+        account,
+        symbol,
+        timeframe,
+        stance,
+        tier,
+        authority,
+        confidence,
+        regime,
+        entry_price,
+        stop_price,
+        min_target,
+        max_target,
+        current_price,
+        raw_payload
+    )
+    VALUES (
+        %(account)s,
+        %(symbol)s,
+        %(timeframe)s,
+        %(stance)s,
+        %(tier)s,
+        %(authority)s,
+        %(confidence)s,
+        %(regime)s,
+        %(entry_price)s,
+        %(stop_price)s,
+        %(min_target)s,
+        %(max_target)s,
+        %(current_price)s,
+        %(raw_payload)s::jsonb
+    )
+    RETURNING id, created_at
+"""
 
-    params = {
-        "account": alert.account,
-        "symbol": alert.symbol,
-        "timeframe": alert.timeframe,
-        "stance": alert.stance,
-        "tier": alert.tier,
-        "authority": alert.authority,
-        "confidence": alert.confidence,
-        "regime": alert.regime,
-        "raw_payload": json.dumps(body),
-    }
+
+params = {
+    "account": alert.account,
+    "symbol": alert.symbol,
+    "timeframe": alert.timeframe,
+    "stance": alert.stance,
+    "tier": alert.tier,
+    "authority": alert.authority,
+    "confidence": alert.confidence,
+    "regime": alert.regime,
+
+    # PHASE 3 — PRICE CONTEXT
+    "entry_price": alert.entry_price,
+    "stop_price": alert.stop_price,
+    "min_target": alert.min_target,
+    "max_target": alert.max_target,
+    "current_price": alert.current_price,
+
+    "raw_payload": json.dumps(body),
+}
+
 
     try:
         with _db_conn() as conn:
