@@ -12,7 +12,7 @@ from observability import router as observability_router
 from negotiation import router as negotiation_router
 from api.webhook import router as webhook_router
 from api.decisions import router as decisions_router
-from omega_prime_core.api.ledger import router as ledger_router
+from api.ledger import router as ledger_router
 # --------------------
 # DECISION STATE MACHINE (import-safe + name-flexible)
 # --------------------
