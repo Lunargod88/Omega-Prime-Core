@@ -8,6 +8,7 @@ from models.enums import (
     AuthorityEnum,
     ExitReasonEnum,
     RegimeEnum,
+    ExitQualityEnum,
 )
 
 router = APIRouter(prefix="/ledger", tags=["ledger"])
@@ -34,20 +35,18 @@ class DecisionIngest(BaseModel):
     exit_quality: Optional[ExitQualityEnum] = None
 
     @validator("confidence")
-    def confidence_range(cls, v):
-        if v is not None and not (0 <= v <= 100):
+    def validate_confidence(cls, v):
+        if v is None:
+            return v
+        if not 0 <= v <= 100:
             raise ValueError("confidence must be between 0 and 100")
         return v
 
 
 @router.post("/ingest")
-def ingest_decision(decision: DecisionIngest):
-    """
-    TradingView → Core ingestion point.
-    Pine semantics enforced here.
-    """
-
+async def ingest_decision(decision: DecisionIngest):
+    # Placeholder until DB write is wired
     return {
-        "status": "accepted",
-        "validated_decision": decision.dict()
+        "status": "ok",
+        "decision": decision.dict()
     }
