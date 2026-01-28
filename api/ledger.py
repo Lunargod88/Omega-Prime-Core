@@ -2,12 +2,11 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, validator
 from typing import Optional
 
-from omega_prime_core.models.enums import (
+from models.enums import (
     StanceEnum,
     TierEnum,
     AuthorityEnum,
     ExitReasonEnum,
-    ExitQualityEnum,
     RegimeEnum,
 )
 
