@@ -1,11 +1,7 @@
 from enum import Enum
 
 
-# ==============================
-# PHASE 1 — CANONICAL ENUMS
-# ==============================
-
-class Stance(str, Enum):
+class StanceEnum(str, Enum):
     ENTER_LONG = "ENTER_LONG"
     ENTER_SHORT = "ENTER_SHORT"
     HOLD_LONG = "HOLD_LONG"
@@ -16,7 +12,7 @@ class Stance(str, Enum):
     WAIT = "WAIT"
 
 
-class Tier(str, Enum):
+class TierEnum(str, Enum):
     S3 = "S+++"
     S2 = "S++"
     S1 = "S+"
@@ -24,21 +20,15 @@ class Tier(str, Enum):
     A = "A"
     B = "B"
     C = "C"
-    ZERO = "Ø"
+    Ø = "Ø"
 
 
-class Authority(str, Enum):
+class AuthorityEnum(str, Enum):
     NORMAL = "NORMAL"
     PRIME = "PRIME"
 
 
-class Regime(str, Enum):
-    COMPRESSION = "COMPRESSION"
-    EXPANSION = "EXPANSION"
-    NEUTRAL = "NEUTRAL"
-
-
-class ExitReason(str, Enum):
+class ExitReasonEnum(str, Enum):
     CRYPTO_TIMEOUT = "CRYPTO_TIMEOUT"
     DISTRIBUTION = "DISTRIBUTION"
     MOMENTUM_FADE = "MOMENTUM_FADE"
@@ -48,7 +38,7 @@ class ExitReason(str, Enum):
     NONE = "NONE"
 
 
-class ExitQuality(str, Enum):
-    EARLY = "EARLY"
-    GOOD = "GOOD"
-    LATE = "LATE"
+class RegimeEnum(str, Enum):
+    COMPRESSION = "COMPRESSION"
+    EXPANSION = "EXPANSION"
+    NEUTRAL = "NEUTRAL"
