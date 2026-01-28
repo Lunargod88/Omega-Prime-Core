@@ -20,7 +20,7 @@ class TierEnum(str, Enum):
     A = "A"
     B = "B"
     C = "C"
-    Ø = "Ø"
+    ZERO = "Ø"   # was Ø, renamed safely
 
 
 class AuthorityEnum(str, Enum):
@@ -42,3 +42,9 @@ class RegimeEnum(str, Enum):
     COMPRESSION = "COMPRESSION"
     EXPANSION = "EXPANSION"
     NEUTRAL = "NEUTRAL"
+
+
+class ExitQualityEnum(str, Enum):
+    EARLY = "EARLY"
+    GOOD = "GOOD"
+    LATE = "LATE"
