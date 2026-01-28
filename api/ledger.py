@@ -1,7 +1,10 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, validator
 from typing import Optional
-
+from db import get_db
+from sqlalchemy.orm import Session
+from models.symbol_whitelist import SymbolWhitelist
+from fastapi import Depends
 from models.enums import (
     StanceEnum,
     TierEnum,
@@ -44,8 +47,18 @@ class DecisionIngest(BaseModel):
 
 
 @router.post("/ingest")
-async def ingest_decision(decision: DecisionIngest):
-    # Placeholder until DB write is wired
+async def ingest_decision(decision: DecisionIngest, db: Session = Depends(get_db)):
+
+    symbol_row = db.query(SymbolWhitelist).filter(
+        SymbolWhitelist.symbol == decision.symbol
+    ).first()
+
+    if not symbol_row:
+        raise HTTPException(status_code=403, detail="Symbol not allowed")
+
+    if symbol_row.authority == "PRIME" and decision.authority != AuthorityEnum.PRIME:
+        raise HTTPException(status_code=403, detail="PRIME symbol requires PRIME authority")
+
     return {
         "status": "ok",
         "decision": decision.dict()
