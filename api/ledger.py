@@ -1,10 +1,10 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, validator
 from typing import Optional
-from db import get_db
-from sqlalchemy.orm import Session
-from models.symbol_whitelist import SymbolWhitelist
-from fastapi import Depends
+import psycopg2
+from psycopg2.extras import RealDictCursor
+from main import get_db
+
 from models.enums import (
     StanceEnum,
     TierEnum,
@@ -47,17 +47,21 @@ class DecisionIngest(BaseModel):
 
 
 @router.post("/ingest")
-async def ingest_decision(decision: DecisionIngest, db: Session = Depends(get_db)):
+async def ingest_decision(decision: DecisionIngest):
+    conn = get_db()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
 
-    symbol_row = db.query(SymbolWhitelist).filter(
-        SymbolWhitelist.symbol == decision.symbol
-    ).first()
+    cur.execute(
+        "SELECT symbol, market_mode FROM symbol_whitelist WHERE symbol = %s;",
+        (decision.symbol,)
+    )
+    symbol_row = cur.fetchone()
+
+    cur.close()
+    conn.close()
 
     if not symbol_row:
         raise HTTPException(status_code=403, detail="Symbol not allowed")
-
-    if symbol_row.authority == "PRIME" and decision.authority != AuthorityEnum.PRIME:
-        raise HTTPException(status_code=403, detail="PRIME symbol requires PRIME authority")
 
     return {
         "status": "ok",
