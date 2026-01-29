@@ -4,7 +4,7 @@ import os
 import uuid
 import psycopg2
 from psycopg2.extras import RealDictCursor, Json
-
+from db import get_db
 from execution.adapter import resolve_execution_mode, session_allowed
 from execution.tradestation import submit_paper_order
 from ai.analyzer import analyze_ledger
@@ -174,8 +174,6 @@ WEBHOOK_KEY = os.getenv("WEBHOOK_KEY")
 # --------------------
 # DATABASE
 # --------------------
-def get_db():
-    return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 
 def ensure_settings_table(cur):
     cur.execute(
