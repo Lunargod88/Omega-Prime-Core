@@ -73,6 +73,21 @@ async def ingest_decision(decision: DecisionIngest):
     if not symbol_row:
         raise HTTPException(status_code=403, detail="Symbol not allowed")
 
+    # ===============================
+    # PHASE 6 — EXIT GOVERNANCE
+    # ===============================
+    if decision.exit_quality and decision.exit_reason == ExitReasonEnum.NONE:
+        raise HTTPException(
+            status_code=400,
+            detail="exit_quality requires exit_reason"
+        )
+
+    if decision.exit_reason == ExitReasonEnum.HUMAN_EXIT and not decision.exit_quality:
+        raise HTTPException(
+            status_code=400,
+            detail="HUMAN_EXIT requires exit_quality"
+        )
+
     return {
         "status": "ok",
         "decision": decision.dict()
