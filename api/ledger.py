@@ -39,6 +39,14 @@ class DecisionIngest(BaseModel):
     exit_reason: Optional[ExitReasonEnum] = ExitReasonEnum.NONE
     exit_quality: Optional[ExitQualityEnum] = None
 
+    # ===== PHASE 5 — FORENSIC REPLAY =====
+    memory_score: Optional[int] = None
+    whale_band: Optional[str] = None
+    hold_strength: Optional[int] = None
+    continuation_efficiency: Optional[int] = None
+    paid: Optional[bool] = False
+    decision_timeline: Optional[dict] = None
+
     @validator("confidence")
     def validate_confidence(cls, v):
         if v is None:
