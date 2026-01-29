@@ -3,7 +3,9 @@ from pydantic import BaseModel, validator
 from typing import Optional
 import psycopg2
 from psycopg2.extras import RealDictCursor
-from main import get_db
+from db import get_db
+import psycopg2
+from psycopg2.extras import RealDictCursor
 
 from models.enums import (
     StanceEnum,
