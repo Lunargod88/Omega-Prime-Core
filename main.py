@@ -14,6 +14,9 @@ from api.webhook import router as webhook_router
 from api.decisions import router as decisions_router
 from api.ledger import router as ledger_router
 from api.controls import router as controls_router
+from api.negotiation import router as negotiation_router
+
+
 # --------------------
 # DECISION STATE MACHINE (import-safe + name-flexible)
 # --------------------
@@ -842,3 +845,4 @@ app.include_router(webhook_router)
 app.include_router(decisions_router)
 app.include_router(ledger_router)
 app.include_router(controls_router, prefix="/controls")
+app.include_router(negotiation_router)
