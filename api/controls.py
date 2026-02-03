@@ -18,3 +18,13 @@ def get_symbols():
     crypto = [r["symbol"] for r in rows if r["market_mode"] == "CRYPTO"]
 
     return {"equity_symbols": equity, "crypto_symbols": crypto}
+
+@router.get("/regimes")
+async def get_regimes():
+    conn = get_db()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT * FROM regime_memory ORDER BY updated_at DESC;")
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    return {"regimes": rows}
