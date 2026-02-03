@@ -80,6 +80,22 @@ async def ingest_decision(decision: DecisionIngest):
 
     if decision.regime.value not in allowed_regimes:
         raise HTTPException(status_code=400, detail="Invalid regime")
+    # ===============================
+    # PHASE 7 — REGIME MEMORY
+    # ===============================
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+
+    cur.execute("""
+    INSERT INTO regime_memory (symbol, timeframe, regime)
+    VALUES (%s, %s, %s)
+    ON CONFLICT (symbol, timeframe)
+    DO UPDATE SET
+    regime = EXCLUDED.regime,
+  updated_at = NOW();
+    """, (decision.symbol, decision.timeframe, decision.regime))
+
+    conn.commit()
+    cur.close()
 
     # ===============================
     # PHASE 6 — EXIT GOVERNANCE
