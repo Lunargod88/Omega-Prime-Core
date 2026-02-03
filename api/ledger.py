@@ -112,6 +112,29 @@ async def ingest_decision(decision: DecisionIngest):
             detail="HUMAN_EXIT requires exit_quality"
         )
 
+    # ===============================
+    # PHASE 7 — REGIME GOVERNANCE
+    # ===============================
+
+    if decision.regime == RegimeEnum.COMPRESSION:
+        if decision.stance in (
+            StanceEnum.ENTER_LONG,
+            StanceEnum.ENTER_SHORT,
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot ENTER trades during COMPRESSION regime"
+            )
+
+    if decision.regime == RegimeEnum.EXPANSION:
+        # Expansion allows entries — no restriction
+        pass
+
+    if decision.regime == RegimeEnum.NEUTRAL:
+        # Neutral allows anything
+        pass
+
+    
     return {
         "status": "ok",
         "decision": decision.dict()
