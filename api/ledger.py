@@ -133,6 +133,11 @@ async def ingest_decision(decision: DecisionIngest):
     if decision.regime == RegimeEnum.NEUTRAL:
         # Neutral allows anything
         pass
+    cur.execute("""
+    INSERT INTO decision_negotiation (decision_id, system_action)
+    VALUES (%s, %s)
+    ON CONFLICT DO NOTHING;
+""", (decision.id, decision.stance))
 
     
     return {
