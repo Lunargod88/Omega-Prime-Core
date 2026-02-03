@@ -72,6 +72,13 @@ async def ingest_decision(decision: DecisionIngest):
 
     if not symbol_row:
         raise HTTPException(status_code=403, detail="Symbol not allowed")
+    # ===============================
+# PHASE 7 — REGIME GOVERNANCE
+# ===============================
+allowed_regimes = {r.value for r in RegimeEnum}
+
+if decision.regime.value not in allowed_regimes:
+    raise HTTPException(status_code=400, detail="Invalid regime")
 
     # ===============================
     # PHASE 6 — EXIT GOVERNANCE
