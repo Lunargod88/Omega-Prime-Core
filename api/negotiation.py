@@ -18,37 +18,22 @@ def get_negotiation_status():
     cur = conn.cursor(cursor_factory=RealDictCursor)
 
     cur.execute("""
-        SELECT 
-            n.decision_id,
-            n.status,
-            n.analysis,
-            n.created_at,
-            d.symbol,
-            d.stance
+        SELECT n.*, d.symbol, d.stance
         FROM decision_negotiation n
-        JOIN decision_ledger d ON d.id = n.decision_id
+        JOIN decisionLedger d ON d.id = n.decision_id
         ORDER BY n.created_at DESC
         LIMIT 1;
     """)
 
     row = cur.fetchone()
 
-    if not row:
-        cur.close()
-        conn.close()
-        return {"latest_decision": None, "analysis": None}
-
     cur.close()
     conn.close()
 
-    return {
-        "decision_id": row["decision_id"],
-        "status": row["status"],
-        "analysis": row["analysis"],
-        "created_at": row["created_at"],
-        "symbol": row["symbol"],
-        "stance": row["stance"],
-    }
+    if not row:
+        return {"latest_decision": None, "analysis": None}
+
+    return row
 
 
 @router.post("/confirm/{decision_id}")
@@ -58,8 +43,7 @@ def confirm_decision(decision_id: int):
 
     cur.execute("""
         UPDATE decision_negotiation
-        SET human_action = 'CONFIRM',
-            updated_at = now()
+        SET status = 'CONFIRMED'
         WHERE decision_id = %s;
     """, (decision_id,))
 
@@ -77,9 +61,8 @@ def reject_decision(decision_id: int, payload: NegotiationAction):
 
     cur.execute("""
         UPDATE decision_negotiation
-        SET human_action = 'REJECT',
-            human_reason = %s,
-            updated_at = now()
+        SET status = 'REJECTED',
+            analysis = %s
         WHERE decision_id = %s;
     """, (payload.reason, decision_id))
 
