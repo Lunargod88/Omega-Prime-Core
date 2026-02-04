@@ -540,10 +540,42 @@ def init_ledger():
         );
         """
     )
+    # --- REQUIRED TABLES FOR INGEST ---
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS symbol_whitelist (
+        symbol TEXT PRIMARY KEY,
+        market_mode TEXT NOT NULL
+    );
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS regime_memory (
+        symbol TEXT NOT NULL,
+        timeframe TEXT NOT NULL,
+        regime TEXT NOT NULL,
+        updated_at TIMESTAMPTZ DEFAULT NOW(),
+        PRIMARY KEY (symbol, timeframe)
+    );
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS decision_negotiation (
+        decision_id INTEGER PRIMARY KEY REFERENCES decision_ledger(id) ON DELETE CASCADE,
+        status TEXT NOT NULL,
+        analysis TEXT,
+        created_at TIMESTAMPTZ NOT NULL
+    );
+    """)
 
     ensure_settings_table(cur)
     ensure_trade_tables(cur)
     ensure_decision_trade_id_column(cur)
+    # --- SEED SYMBOL WHITELIST ---
+    cur.execute("""
+    INSERT INTO symbol_whitelist (symbol, market_mode)
+    VALUES ('BTCUSD', 'CRYPTO')
+    ON CONFLICT DO NOTHING;
+    """)
 
     # Seed defaults if missing (do not overwrite)
     cur.execute("SELECT 1 FROM omega_settings WHERE key = 'kill_switch';")
