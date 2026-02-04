@@ -4,8 +4,6 @@ from typing import Optional
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from db import get_db
-import psycopg2
-from psycopg2.extras import RealDictCursor
 
 from models.enums import (
     StanceEnum,
@@ -61,16 +59,18 @@ async def ingest_decision(decision: DecisionIngest):
     conn = get_db()
     cur = conn.cursor(cursor_factory=RealDictCursor)
 
+    # ===============================
+    # SYMBOL WHITELIST
+    # ===============================
     cur.execute(
         "SELECT symbol, market_mode FROM symbol_whitelist WHERE symbol = %s;",
         (decision.symbol,)
     )
     symbol_row = cur.fetchone()
 
-    cur.close()
-    conn.close()
-
     if not symbol_row:
+        cur.close()
+        conn.close()
         raise HTTPException(status_code=403, detail="Symbol not allowed")
 
     # ===============================
@@ -79,34 +79,36 @@ async def ingest_decision(decision: DecisionIngest):
     allowed_regimes = {r.value for r in RegimeEnum}
 
     if decision.regime.value not in allowed_regimes:
+        cur.close()
+        conn.close()
         raise HTTPException(status_code=400, detail="Invalid regime")
+
     # ===============================
     # PHASE 7 — REGIME MEMORY
     # ===============================
-    cur = conn.cursor(cursor_factory=RealDictCursor)
-
     cur.execute("""
-    INSERT INTO regime_memory (symbol, timeframe, regime)
-    VALUES (%s, %s, %s)
-    ON CONFLICT (symbol, timeframe)
-    DO UPDATE SET
-    regime = EXCLUDED.regime,
-  updated_at = NOW();
+        INSERT INTO regime_memory (symbol, timeframe, regime)
+        VALUES (%s, %s, %s)
+        ON CONFLICT (symbol, timeframe)
+        DO UPDATE SET
+            regime = EXCLUDED.regime,
+            updated_at = NOW();
     """, (decision.symbol, decision.timeframe, decision.regime))
-
-    conn.commit()
-    cur.close()
 
     # ===============================
     # PHASE 6 — EXIT GOVERNANCE
     # ===============================
     if decision.exit_quality and decision.exit_reason == ExitReasonEnum.NONE:
+        cur.close()
+        conn.close()
         raise HTTPException(
             status_code=400,
             detail="exit_quality requires exit_reason"
         )
 
     if decision.exit_reason == ExitReasonEnum.HUMAN_EXIT and not decision.exit_quality:
+        cur.close()
+        conn.close()
         raise HTTPException(
             status_code=400,
             detail="HUMAN_EXIT requires exit_quality"
@@ -115,32 +117,73 @@ async def ingest_decision(decision: DecisionIngest):
     # ===============================
     # PHASE 7 — REGIME GOVERNANCE
     # ===============================
-
     if decision.regime == RegimeEnum.COMPRESSION:
         if decision.stance in (
             StanceEnum.ENTER_LONG,
             StanceEnum.ENTER_SHORT,
         ):
+            cur.close()
+            conn.close()
             raise HTTPException(
                 status_code=400,
                 detail="Cannot ENTER trades during COMPRESSION regime"
             )
 
-    if decision.regime == RegimeEnum.EXPANSION:
-        # Expansion allows entries — no restriction
-        pass
-
-    if decision.regime == RegimeEnum.NEUTRAL:
-        # Neutral allows anything
-        pass
+    # ===============================
+    # INSERT DECISION LEDGER
+    # ===============================
     cur.execute("""
-    INSERT INTO decision_negotiation (decision_id, system_action)
-    VALUES (%s, %s)
-    ON CONFLICT DO NOTHING;
-""", (decision.id, decision.stance))
+        INSERT INTO decisionLedger (
+            symbol, timeframe, stance, tier, authority, regime,
+            confidence, entry_price, stop_price,
+            min_target, max_target, current_price,
+            exit_reason, exit_quality,
+            memory_score, whale_band, hold_strength,
+            continuation_efficiency, paid, decision_timeline
+        )
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        RETURNING id;
+    """, (
+        decision.symbol,
+        decision.timeframe,
+        decision.stance,
+        decision.tier,
+        decision.authority,
+        decision.regime,
+        decision.confidence,
+        decision.entry_price,
+        decision.stop_price,
+        decision.min_target,
+        decision.max_target,
+        decision.current_price,
+        decision.exit_reason,
+        decision.exit_quality,
+        decision.memory_score,
+        decision.whale_band,
+        decision.hold_strength,
+        decision.continuation_efficiency,
+        decision.paid,
+        decision.decision_timeline,
+    ))
 
-    
+    ledger_row = cur.fetchone()
+    decision_id = ledger_row["id"]
+
+    # ===============================
+    # INSERT NEGOTIATION ROW
+    # ===============================
+    cur.execute("""
+        INSERT INTO decision_negotiation (decision_id, status, analysis, created_at)
+        VALUES (%s, 'PENDING', %s, NOW())
+        ON CONFLICT DO NOTHING;
+    """, (decision_id, None))
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
     return {
         "status": "ok",
+        "decision_id": decision_id,
         "decision": decision.dict()
     }
