@@ -133,7 +133,7 @@ async def ingest_decision(decision: DecisionIngest):
     # INSERT DECISION LEDGER
     # ===============================
     cur.execute("""
-        INSERT INTO decisionLedger (
+        INSERT INTO decision_ledger (
             symbol, timeframe, stance, tier, authority, regime,
             confidence, entry_price, stop_price,
             min_target, max_target, current_price,
