@@ -8,7 +8,7 @@ router = APIRouter(prefix="/negotiation", tags=["negotiation"])
 
 
 class NegotiationAction(BaseModel):
-    action: str  # CONFIRM / REJECT / HOLD
+    action: str
     reason: Optional[str] = None
 
 
@@ -18,10 +18,9 @@ def get_negotiation_status():
     cur = conn.cursor(cursor_factory=RealDictCursor)
 
     cur.execute("""
-        SELECT n.*, d.symbol, d.stance
-        FROM decision_negotiation n
-        JOIN decisionLedger d ON d.id = n.decision_id
-        ORDER BY n.created_at DESC
+        SELECT *
+        FROM decision_negotiation
+        ORDER BY created_at DESC
         LIMIT 1;
     """)
 
@@ -43,8 +42,7 @@ def confirm_decision(decision_id: int):
 
     cur.execute("""
         UPDATE decision_negotiation
-        SET status = 'CONFIRM',
-            updated_at = now()
+        SET status = 'CONFIRM'
         WHERE decision_id = %s;
     """, (decision_id,))
 
@@ -63,8 +61,7 @@ def reject_decision(decision_id: int, payload: NegotiationAction):
     cur.execute("""
         UPDATE decision_negotiation
         SET status = 'REJECT',
-            analysis = %s,
-            updated_at = now()
+            analysis = %s
         WHERE decision_id = %s;
     """, (payload.reason, decision_id))
 
