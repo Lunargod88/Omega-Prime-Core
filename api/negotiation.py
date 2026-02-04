@@ -26,6 +26,9 @@ def get_negotiation_status():
     """)
 
     row = cur.fetchone()
+    if not row:
+    return {"latest_decision": None, "analysis": None}
+
     cur.close()
     conn.close()
 
