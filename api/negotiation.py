@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from typing import Optional
 from pydantic import BaseModel
 from psycopg2.extras import RealDictCursor
@@ -30,7 +30,7 @@ def get_negotiation_status():
     cur.close()
     conn.close()
 
-    if not row:
+    if row is None:
         return {"latest_decision": None, "analysis": None}
 
     return row
@@ -43,7 +43,8 @@ def confirm_decision(decision_id: int):
 
     cur.execute("""
         UPDATE decision_negotiation
-        SET status = 'CONFIRMED'
+        SET status = 'CONFIRM',
+            updated_at = now()
         WHERE decision_id = %s;
     """, (decision_id,))
 
@@ -61,8 +62,9 @@ def reject_decision(decision_id: int, payload: NegotiationAction):
 
     cur.execute("""
         UPDATE decision_negotiation
-        SET status = 'REJECTED',
-            analysis = %s
+        SET status = 'REJECT',
+            analysis = %s,
+            updated_at = now()
         WHERE decision_id = %s;
     """, (payload.reason, decision_id))
 
