@@ -26,8 +26,19 @@ def get_negotiation_status():
     """)
 
     row = cur.fetchone()
-    if not row:
+
+if not row:
     return {"latest_decision": None, "analysis": None}
+
+decision_id, status, analysis, created_at = row
+
+return {
+    "decision_id": decision_id,
+    "status": status,
+    "analysis": analysis,
+    "created_at": created_at,
+}
+
 
     cur.close()
     conn.close()
