@@ -106,15 +106,15 @@ async def ingest_decision(decision: DecisionIngest):
             detail="exit_quality requires exit_reason"
         )
 
-    # HUMAN_EXIT enum may not exist depending on enum version
-if hasattr(ExitReasonEnum, "HUMAN_EXIT"):
-    if decision.exit_reason == ExitReasonEnum.HUMAN_EXIT and not decision.exit_quality:
-        cur.close()
-        conn.close()
-        raise HTTPException(
-            status_code=400,
-            detail="HUMAN_EXIT requires exit_quality"
-        )
+        # HUMAN_EXIT enum may not exist depending on enum version
+    if hasattr(ExitReasonEnum, "HUMAN_EXIT"):
+        if decision.exit_reason == ExitReasonEnum.HUMAN_EXIT and not decision.exit_quality:
+            cur.close()
+            conn.close()
+            raise HTTPException(
+                status_code=400,
+                detail="HUMAN_EXIT requires exit_quality"
+            )
 
     # ===============================
     # PHASE 7 — REGIME GOVERNANCE
