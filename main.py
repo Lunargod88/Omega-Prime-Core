@@ -518,8 +518,6 @@ CREATE TABLE IF NOT EXISTS decision_ledger (
     id SERIAL PRIMARY KEY,
     created_at TIMESTAMPTZ DEFAULT NOW(),
 
-    account TEXT DEFAULT 'JAYLYN',
-
     symbol TEXT,
     timeframe TEXT,
 
@@ -543,10 +541,9 @@ CREATE TABLE IF NOT EXISTS decision_ledger (
     whale_band TEXT,
     hold_strength INTEGER,
     continuation_efficiency INTEGER,
-    paid BOOLEAN DEFAULT FALSE,
+    paid BOOLEAN,
     decision_timeline JSONB
 );
-""")
 
     # --- REQUIRED TABLES FOR INGEST ---
     cur.execute("""
