@@ -513,39 +513,45 @@ def init_ledger():
     conn = get_db()
     cur = conn.cursor()
 
+    # -----------------------------
+    # Decision Ledger
+    # -----------------------------
     cur.execute("""
-CREATE TABLE IF NOT EXISTS decision_ledger (
-    id SERIAL PRIMARY KEY,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
+    CREATE TABLE IF NOT EXISTS decision_ledger (
+        id SERIAL PRIMARY KEY,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
 
-    symbol TEXT,
-    timeframe TEXT,
+        symbol TEXT,
+        timeframe TEXT,
 
-    stance TEXT,
-    tier TEXT,
-    authority TEXT,
-    regime TEXT,
+        stance TEXT,
+        tier TEXT,
+        authority TEXT,
+        regime TEXT,
 
-    confidence INTEGER,
+        confidence INTEGER,
 
-    entry_price FLOAT,
-    stop_price FLOAT,
-    min_target FLOAT,
-    max_target FLOAT,
-    current_price FLOAT,
+        entry_price FLOAT,
+        stop_price FLOAT,
+        min_target FLOAT,
+        max_target FLOAT,
+        current_price FLOAT,
 
-    exit_reason TEXT,
-    exit_quality TEXT,
+        exit_reason TEXT,
+        exit_quality TEXT,
 
-    memory_score INTEGER,
-    whale_band TEXT,
-    hold_strength INTEGER,
-    continuation_efficiency INTEGER,
-    paid BOOLEAN,
-    decision_timeline JSONB
-);
+        memory_score INTEGER,
+        whale_band TEXT,
+        hold_strength INTEGER,
+        continuation_efficiency INTEGER,
+        paid BOOLEAN,
+        decision_timeline JSONB
+    );
+    """)
 
-    # --- REQUIRED TABLES FOR INGEST ---
+    # -----------------------------
+    # Symbol Whitelist
+    # -----------------------------
     cur.execute("""
     CREATE TABLE IF NOT EXISTS symbol_whitelist (
         symbol TEXT PRIMARY KEY,
@@ -553,6 +559,9 @@ CREATE TABLE IF NOT EXISTS decision_ledger (
     );
     """)
 
+    # -----------------------------
+    # Regime Memory
+    # -----------------------------
     cur.execute("""
     CREATE TABLE IF NOT EXISTS regime_memory (
         symbol TEXT NOT NULL,
@@ -563,6 +572,9 @@ CREATE TABLE IF NOT EXISTS decision_ledger (
     );
     """)
 
+    # -----------------------------
+    # Negotiation Table
+    # -----------------------------
     cur.execute("""
     CREATE TABLE IF NOT EXISTS decision_negotiation (
         decision_id INTEGER PRIMARY KEY REFERENCES decision_ledger(id) ON DELETE CASCADE,
@@ -572,37 +584,25 @@ CREATE TABLE IF NOT EXISTS decision_ledger (
     );
     """)
 
+    # -----------------------------
+    # System Tables
+    # -----------------------------
     ensure_settings_table(cur)
     ensure_trade_tables(cur)
     ensure_decision_trade_id_column(cur)
-    # --- SEED SYMBOL WHITELIST ---
+
+    # Seed BTCUSD so ingest works
     cur.execute("""
     INSERT INTO symbol_whitelist (symbol, market_mode)
-    VALUES ('BTCUSD', 'CRYPTO')
+    VALUES ('BTCUSD','CRYPTO')
     ON CONFLICT DO NOTHING;
     """)
-
-    # Seed defaults if missing (do not overwrite)
-    cur.execute("SELECT 1 FROM omega_settings WHERE key = 'kill_switch';")
-    if not cur.fetchone():
-        cur.execute(
-            "INSERT INTO omega_settings (key, value) VALUES (%s, %s);",
-            ("kill_switch", "true" if ENV_KILL_SWITCH_DEFAULT else "false"),
-        )
-
-    cur.execute("SELECT 1 FROM omega_settings WHERE key = 'market_mode';")
-    if not cur.fetchone():
-        seed_mode = ENV_MODE_DEFAULT if ENV_MODE_DEFAULT in {"EQUITY", "CRYPTO"} else "EQUITY"
-        cur.execute(
-            "INSERT INTO omega_settings (key, value) VALUES (%s, %s);",
-            ("market_mode", seed_mode),
-        )
 
     conn.commit()
     cur.close()
     conn.close()
 
-    return {"status": "decision_ledger + omega_settings + trades + trade_events initialized"}
+    return {"status": "ledger initialized clean"}
 
 # --------------------
 # RECORD DECISION (18.1 + 18.2 + 18.3 + 18.4 + TRADE MEMORY GRAPH + DECISION STATE MACHINE)
