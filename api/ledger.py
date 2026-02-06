@@ -175,10 +175,22 @@ async def ingest_decision(decision: DecisionIngest):
     # INSERT NEGOTIATION ROW
     # ===============================
     cur.execute("""
-        INSERT INTO decision_negotiation (decision_id, status, analysis, created_at)
-        VALUES (%s, 'PENDING', %s, NOW())
-        ON CONFLICT DO NOTHING;
-    """, (decision_id, None))
+    INSERT INTO decision_negotiation
+    (
+        decision_id,
+        system_action,
+        human_action,
+        human_reason,
+        auto_confirm,
+        created_at,
+        updated_at
+    )
+    VALUES (%s,%s,NULL,NULL,false,NOW(),NOW())
+    ON CONFLICT DO NOTHING;
+""", (
+    decision_id,
+    decision.stance
+))
 
     conn.commit()
     cur.close()
