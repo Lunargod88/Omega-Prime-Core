@@ -513,40 +513,40 @@ def init_ledger():
     conn = get_db()
     cur = conn.cursor()
 
-    cur.execute(
-    """
-    CREATE TABLE IF NOT EXISTS decision_ledger (
-        id SERIAL PRIMARY KEY,
-        created_at TIMESTAMPTZ DEFAULT NOW(),
+    cur.execute("""
+CREATE TABLE IF NOT EXISTS decision_ledger (
+    id SERIAL PRIMARY KEY,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
 
-        symbol TEXT,
-        timeframe TEXT,
+    account TEXT DEFAULT 'JAYLYN',
 
-        stance TEXT,
-        tier TEXT,
-        authority TEXT,
-        regime TEXT,
+    symbol TEXT,
+    timeframe TEXT,
 
-        confidence INTEGER,
+    stance TEXT,
+    tier TEXT,
+    authority TEXT,
+    regime TEXT,
 
-        entry_price FLOAT,
-        stop_price FLOAT,
-        min_target FLOAT,
-        max_target FLOAT,
-        current_price FLOAT,
+    confidence INTEGER,
 
-        exit_reason TEXT,
-        exit_quality TEXT,
+    entry_price FLOAT,
+    stop_price FLOAT,
+    min_target FLOAT,
+    max_target FLOAT,
+    current_price FLOAT,
 
-        memory_score INTEGER,
-        whale_band TEXT,
-        hold_strength INTEGER,
-        continuation_efficiency INTEGER,
-        paid BOOLEAN,
-        decision_timeline JSONB
-    );
-    """
-)
+    exit_reason TEXT,
+    exit_quality TEXT,
+
+    memory_score INTEGER,
+    whale_band TEXT,
+    hold_strength INTEGER,
+    continuation_efficiency INTEGER,
+    paid BOOLEAN DEFAULT FALSE,
+    decision_timeline JSONB
+);
+""")
 
     # --- REQUIRED TABLES FOR INGEST ---
     cur.execute("""
